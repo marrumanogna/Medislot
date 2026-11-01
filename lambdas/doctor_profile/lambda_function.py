@@ -465,6 +465,31 @@ def handler(event, context):
                     return error_response(404, "Doctor profile not found", cid)
 
                 result = {**doctor, **decode_json_columns(profile)}
+                # Generate a temporary URL to display the doctor's profile photo
+                photo_key = result.get("photo_key")
+                bucket = os.environ.get("DOCTOR_PHOTOS_BUCKET")
+
+                result["photo_url"] = None
+
+                if (
+                    photo_key
+                    and bucket
+                    and photo_key.startswith(f"doctors/{user_id}/")
+                ):
+                    result["photo_url"] = s3.generate_presigned_url(
+                        "get_object",
+                        Params={
+                            "Bucket": bucket,
+                            "Key": photo_key,
+                            "ResponseContentDisposition": "inline",
+                        },
+                        ExpiresIn=300,
+                    )
+                    logger.info(
+                    "PHOTO URL DEBUG: key_valid=%s url_type=%s",
+                    bool(photo_key and photo_key.startswith(f"doctors/{user_id}/")),
+                    type(result["photo_url"]).__name__
+                    )
 
                 for key in ("created_at", "updated_at"):
                     if result.get(key):
