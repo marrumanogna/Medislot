@@ -26,7 +26,7 @@ def handler(event, context):
                 FROM information_schema.STATISTICS
                 WHERE TABLE_SCHEMA = DATABASE()
                   AND TABLE_NAME = 'appointment_slots'
-                  AND INDEX_NAME = 'uq_doctor_slot'
+                  AND INDEX_NAME = 'uq_doctor_consultation_slot'
                 GROUP BY INDEX_NAME, NON_UNIQUE
             """)
             index_row = cur.fetchone()
@@ -70,3 +70,4 @@ def handler(event, context):
     finally:
         if conn:
             conn.close()
+
