@@ -1,4 +1,3 @@
-
 from common import config, dbconn, emit
 
 
@@ -7,15 +6,12 @@ def handler(event, context):
     conn = None
 
     try:
-        c = config()
-        conn = dbconn(c)
+        conn = dbconn(config())
 
         with conn.cursor() as cur:
-            # Keep the existing connectivity check.
             cur.execute("SELECT 1 AS connected")
             connection_row = cur.fetchone()
 
-            # Read-only check of the live database index.
             cur.execute("""
                 SELECT
                     INDEX_NAME,
@@ -31,37 +27,42 @@ def handler(event, context):
             """)
             index_row = cur.fetchone()
 
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total_slots,
+                    COALESCE(SUM(status = 'AVAILABLE'), 0)
+                        AS available_slots,
+                    COALESCE(SUM(status = 'BOOKED'), 0)
+                        AS booked_slots
+                FROM appointment_slots
+            """)
+            slot_counts = cur.fetchone()
+
         constraint_exists = (
             index_row is not None
             and index_row["NON_UNIQUE"] == 0
         )
 
-        emit(
-            "info",
-            "rds_constraint_check_completed",
-            cid
-        )
-
-        return {
-            "statusCode": 200,
-            "body": {
-                "connected": bool(
-                    connection_row
-                    and connection_row["connected"] == 1
-                ),
-                "unique_constraint_exists": constraint_exists,
-                "constraint_name": (
-                    index_row["INDEX_NAME"] if index_row else None
-                ),
-                "is_unique": (
-                    index_row["NON_UNIQUE"] == 0
-                    if index_row else False
-                ),
-                "columns": (
-                    index_row["indexed_columns"] if index_row else None
-                )
-            }
+        result = {
+            "connected": bool(connection_row["connected"] == 1),
+            "unique_constraint_exists": constraint_exists,
+            "constraint_name": (
+                index_row["INDEX_NAME"] if index_row else None
+            ),
+            "is_unique": (
+                index_row["NON_UNIQUE"] == 0 if index_row else False
+            ),
+            "columns": (
+                index_row["indexed_columns"] if index_row else None
+            ),
+            "total_slots": int(slot_counts["total_slots"]),
+            "available_slots": int(slot_counts["available_slots"]),
+            "booked_slots": int(slot_counts["booked_slots"]),
         }
+
+        emit("info", "rds_constraint_check_completed", cid, **result)
+
+        return {"statusCode": 200, "body": result}
 
     except Exception:
         emit("error", "rds_constraint_check_failed", cid)
@@ -70,4 +71,3 @@ def handler(event, context):
     finally:
         if conn:
             conn.close()
-
