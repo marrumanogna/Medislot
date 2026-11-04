@@ -333,6 +333,9 @@ jobs:
             cp -R "lambdas/${fn}/." "$tmp/"
             cp "lambdas/common.py" "$tmp/common.py"
 
+            # Required by PyMySQL for MySQL caching_sha2_password authentication
+            pip install --quiet cryptography -t "$tmp"
+
             if [[ -f "lambdas/${fn}/requirements.txt" ]]; then
               pip install --quiet \
                 -r "lambdas/${fn}/requirements.txt" \
