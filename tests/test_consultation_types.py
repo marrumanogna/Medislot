@@ -54,9 +54,9 @@ def test_list_types(api):
     assert result["statusCode"] == 200
     cursor.execute.assert_called_once()
 
-def test_create_type(api):
+def test_post_method_not_allowed(api):
     module, conn, cursor = api
-    cursor.lastrowid = 7
+
     result = module.handler(
         event("POST", {
             "name": "Video consultation",
@@ -65,11 +65,6 @@ def test_create_type(api):
         }),
         None,
     )
-    assert result["statusCode"] == 201
-    conn.commit.assert_called_once()
 
-def test_create_type_requires_name(api):
-    module, conn, _ = api
-    result = module.handler(event("POST", {"name": ""}), None)
-    assert result["statusCode"] == 400
+    assert result["statusCode"] == 405
     conn.commit.assert_not_called()

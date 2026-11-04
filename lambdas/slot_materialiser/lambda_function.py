@@ -49,7 +49,43 @@ def utc_to_ist(utc_dt):
         .astimezone(IST)
         .replace(tzinfo=None)
     )
+def localize_slot(local_dt, tz):
+    """Convert local datetime to UTC, handling DST transitions."""
 
+    candidates = []
+
+    for fold in (0, 1):
+        aware = local_dt.replace(tzinfo=tz, fold=fold)
+        utc_dt = aware.astimezone(timezone.utc)
+        round_trip = utc_dt.astimezone(tz)
+
+        if round_trip.replace(tzinfo=None) == local_dt:
+            if utc_dt not in candidates:
+                candidates.append(utc_dt)
+
+    if not candidates:
+        return None
+
+    return min(candidates).replace(tzinfo=None)
+
+def localize_slot(local_dt, tz):
+    """Convert local datetime to UTC, handling DST transitions."""
+
+    candidates = []
+
+    for fold in (0, 1):
+        aware = local_dt.replace(tzinfo=tz, fold=fold)
+        utc_dt = aware.astimezone(timezone.utc)
+        round_trip = utc_dt.astimezone(tz)
+
+        if round_trip.replace(tzinfo=None) == local_dt:
+            if utc_dt not in candidates:
+                candidates.append(utc_dt)
+
+    if not candidates:
+        return None
+
+    return min(candidates).replace(tzinfo=None)
 
 def intervals_overlap(start1, end1, start2, end2):
     """Return True when two time intervals overlap."""

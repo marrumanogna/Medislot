@@ -1,4 +1,5 @@
 import logging
+import time as time_module
 from datetime import time, timedelta
 
 from common import config, dbconn, response, body
@@ -11,33 +12,21 @@ IST_TIMEZONE = "Asia/Kolkata"
 
 
 def normalize_time(value):
-    """Convert MySQL TIME or string values to HH:MM:SS."""
-    if isinstance(value, timedelta):
-        seconds = int(value.total_seconds())
-        return (
-            f"{(seconds // 3600) % 24:02d}:"
-            f"{(seconds % 3600) // 60:02d}:"
-            f"{seconds % 60:02d}"
-        )
-
     if isinstance(value, time):
         return value.strftime("%H:%M:%S")
 
-    if not isinstance(value, str):
-        raise ValueError("Time must be a string")
-
-    value = value.strip()
+    value = str(value).strip()
 
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
-            return time.strptime(value, fmt) and (
-                value if fmt == "%H:%M:%S"
-                else f"{value}:00"
-            )
+            time_module.strptime(value, fmt)
+            if fmt == "%H:%M":
+                return f"{value}:00"
+            return value
         except ValueError:
             continue
 
-    raise ValueError("Time must use HH:MM or HH:MM:SS format")
+    raise ValueError("Invalid time format")
 
 
 def time_to_seconds(value):
