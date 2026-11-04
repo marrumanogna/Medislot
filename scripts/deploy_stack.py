@@ -71,11 +71,86 @@ if exists:
 
 kind = "UPDATE" if exists else "CREATE"
 print(f"DEBUG change_set_type={kind}")
+
 name = f"m2-{uuid.uuid4().hex[:12]}"
-cmd = ["cloudformation", "create-change-set", "--stack-name", stack_name,
-       "--template-body", f"file://{template}", "--change-set-name", name,
-       "--change-set-type", kind, "--capabilities", "CAPABILITY_NAMED_IAM",
-       "--parameters"] + [f"ParameterKey={p['ParameterKey']},ParameterValue={p['ParameterValue']}" for p in parameters]
+
+# CloudFormation TemplateBody limit is 51,200 bytes.
+template_size = os.path.getsize(template)
+
+print(f"DEBUG template={template}")
+print(f"DEBUG template_size={template_size}")
+
+template_args = []
+
+if template_size <= 51200:
+    # Small templates can be passed directly.
+    template_args = [
+        "--template-body",
+        f"file://{template}"
+    ]
+
+else:
+    # Large templates must be uploaded to S3.
+    artifact_bucket = next(
+        (
+            p["ParameterValue"]
+            for p in parameters
+            if p["ParameterKey"] == "ArtifactBucket"
+        ),
+        None
+    )
+
+    if not artifact_bucket:
+        raise SystemExit(
+            "ERROR: Template exceeds 51,200 bytes, "
+            "but ArtifactBucket parameter was not supplied."
+        )
+
+    template_key = (
+        f"cloudformation/{stack_name}/"
+        f"{uuid.uuid4().hex}-{os.path.basename(template)}"
+    )
+
+    print(
+        f"Uploading large CloudFormation template to "
+        f"s3://{artifact_bucket}/{template_key}"
+    )
+
+    aws(
+        "s3",
+        "cp",
+        template,
+        f"s3://{artifact_bucket}/{template_key}",
+        "--sse",
+        "AES256"
+    )
+
+    template_url = (
+        f"https://{artifact_bucket}.s3."
+        f"{region}.amazonaws.com/{template_key}"
+    )
+
+    print(f"DEBUG template_url={template_url}")
+
+    template_args = [
+        "--template-url",
+        template_url
+    ]
+
+cmd = [
+    "cloudformation",
+    "create-change-set",
+    "--stack-name", stack_name,
+    *template_args,
+    "--change-set-name", name,
+    "--change-set-type", kind,
+    "--capabilities", "CAPABILITY_NAMED_IAM",
+    "--parameters"
+] + [
+    f"ParameterKey={p['ParameterKey']},ParameterValue={p['ParameterValue']}"
+    for p in parameters
+]
+
 result = aws(*cmd, check=False)
 if result.returncode:
     print(result.stderr)
