@@ -1,16 +1,34 @@
+import logging
+
 from common import config, dbconn, emit
 
 
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+
 def handler(event, context):
+    logger.info("RDS Constraint Check Lambda execution started")
+
     cid = (event or {}).get("correlationId")
     conn = None
+
+    logger.info("Checking RDS database connection and appointment slots constraint")
 
     try:
         conn = dbconn(config())
 
+        logger.info("RDS database connection established")
+
         with conn.cursor() as cur:
+            logger.info("Checking database connectivity")
+
             cur.execute("SELECT 1 AS connected")
             connection_row = cur.fetchone()
+
+            logger.info("Database connectivity check completed")
+
+            logger.info("Checking unique constraint on appointment_slots")
 
             cur.execute("""
                 SELECT
@@ -27,6 +45,13 @@ def handler(event, context):
             """)
             index_row = cur.fetchone()
 
+            if index_row:
+                logger.info("Unique constraint index found")
+            else:
+                logger.warning("Unique constraint index not found")
+
+            logger.info("Fetching appointment slot counts")
+
             cur.execute("""
                 SELECT
                     COUNT(*) AS total_slots,
@@ -37,6 +62,8 @@ def handler(event, context):
                 FROM appointment_slots
             """)
             slot_counts = cur.fetchone()
+
+            logger.info("Appointment slot counts retrieved successfully")
 
         constraint_exists = (
             index_row is not None
@@ -60,14 +87,32 @@ def handler(event, context):
             "booked_slots": int(slot_counts["booked_slots"]),
         }
 
+        logger.info(
+            "RDS check completed: connected=%s, unique_constraint_exists=%s",
+            result["connected"],
+            result["unique_constraint_exists"]
+        )
+
+        logger.info(
+            "Slot counts: total=%s, available=%s, booked=%s",
+            result["total_slots"],
+            result["available_slots"],
+            result["booked_slots"]
+        )
+
         emit("info", "rds_constraint_check_completed", cid, **result)
+
+        logger.info("RDS Constraint Check Lambda completed successfully")
 
         return {"statusCode": 200, "body": result}
 
     except Exception:
+        logger.exception("RDS Constraint Check Lambda failed")
+
         emit("error", "rds_constraint_check_failed", cid)
         raise
 
     finally:
         if conn:
             conn.close()
+            logger.info("RDS database connection closed")

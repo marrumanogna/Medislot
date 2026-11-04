@@ -208,6 +208,34 @@ Resources:
           - Fn::ImportValue: !Sub 'MediSlot-${Environment}-PrivateSubnet1Id'
           - Fn::ImportValue: !Sub 'MediSlot-${Environment}-PrivateSubnet2Id'
       Environment: {Variables: {ENVIRONMENT: !Ref Environment}}
+  DoctorSlotManagementRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'MediSlot-${Environment}-DoctorSlotManagementRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref LambdaExecutionBasePolicy
+      Policies:
+        - PolicyName: DoctorSlotManagementRuntimeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/db/*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: '*'
+
   DoctorProfileRole:
     Type: AWS::IAM::Role
     Properties:
@@ -419,6 +447,31 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment
+  DoctorSlotManagementFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'medislot-${Environment}-doctor-slot-management'
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Role: !GetAtt DoctorSlotManagementRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Sub '${ArtifactPrefix}/doctor_slot_management.zip'
+      VpcConfig:
+        SecurityGroupIds:
+          - !ImportValue
+              Fn::Sub: 'MediSlot-${Environment}-LambdaSecurityGroupId'
+        SubnetIds:
+          - !ImportValue
+              Fn::Sub: 'MediSlot-${Environment}-PrivateSubnet1Id'
+          - !ImportValue
+              Fn::Sub: 'MediSlot-${Environment}-PrivateSubnet2Id'
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+
   ProtectedFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -614,6 +667,20 @@ Resources:
       RestApiId: !Ref RestApi
       ParentId: !Ref BlackoutDatesResource
       PathPart: '{blackout_id}'
+  DoctorSlotsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref DoctorResource
+      PathPart: slots
+
+  DoctorSlotIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref DoctorSlotsResource
+      PathPart: '{slot_id}'
+
   DoctorScheduleResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -775,6 +842,45 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AvailabilityPatternsFunction.Arn}/invocations'
+  DoctorSlotsPutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref DoctorSlotsResource
+      HttpMethod: PUT
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorSlotManagementFunction.Arn}/invocations'
+
+  DoctorSlotsPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref DoctorSlotsResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorSlotManagementFunction.Arn}/invocations'
+
+  DoctorSlotIdPatchMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref DoctorSlotIdResource
+      HttpMethod: PATCH
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorSlotManagementFunction.Arn}/invocations'
+
   DoctorScheduleGetMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -954,6 +1060,14 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/*/doctor/availability-patterns*'
+  DoctorSlotManagementInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DoctorSlotManagementFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/*/doctor/slots*'
+
   DoctorScheduleInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -1019,6 +1133,9 @@ Resources:
       - BlackoutDateIdGetMethod
       - BlackoutDateIdDeleteMethod
       - BlackoutDateIdPutMethod
+      - DoctorSlotsPutMethod
+      - DoctorSlotsPostMethod
+      - DoctorSlotIdPatchMethod
       - DoctorScheduleGetMethod
     Properties:
       RestApiId: !Ref RestApi
