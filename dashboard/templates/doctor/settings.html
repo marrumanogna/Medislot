@@ -1,0 +1,21 @@
+{% extends "portal.html" %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+<section class="card">
+  <div class="card-head"><div><h2>Account</h2><p>Your sign-in details for this portal.</p></div></div>
+  <div class="card-body"><dl class="kv">
+    <dt>Email</dt><dd>{{ email }}</dd>
+    <dt>Role</dt><dd>Doctor</dd>
+    <dt>Name</dt><dd id="set-name">–</dd>
+    <dt>Timezone</dt><dd id="set-tz">–</dd>
+  </dl></div>
+</section>
+<section class="card">
+  <div class="card-head"><div><h2>Session</h2><p>Sessions expire automatically for your safety.</p></div></div>
+  <div class="card-body" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+    <p class="muted" style="max-width:52ch">Logging out ends this session and revokes its access, so the account can't be used from this browser again until you sign in.</p>
+    <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn btn-danger" type="submit">{{ icon('logout') }}Log out</button></form>
+  </div>
+</section>
+<p class="muted" style="font-size:13.5px">To change your name, licence or clinic details, go to <a href="{{ url_for('doctor_profile') }}">My profile</a>.</p>
+{% endblock %}

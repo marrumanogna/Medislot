@@ -1,0 +1,96 @@
+
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: MediSlot Flask Dashboard EC2 deployment.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-07aaef20c1e2c9fd8
+
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0305c2728b827421c
+
+  DashboardSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0dcbc850f2c978482
+
+  InstanceProfileName:
+    Type: String
+    Default: instanceRole
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: workbench
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+  ApiBaseUrl:
+    Type: String
+    Description: Existing MediSlot API Gateway base URL.
+
+  FlaskSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Long random Flask session secret.
+
+Resources:
+  DashboardInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: t3.micro
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref InstanceProfileName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: true
+          SubnetId: !Ref PublicSubnetId
+          GroupSet:
+            - !Ref DashboardSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: !Sub medislot-${Environment}-dashboard
+        - Key: Project
+          Value: MediSlot
+
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -eux
+
+          dnf update -y
+          dnf install -y python3 python3-pip git
+
+          mkdir -p /opt/medislot-dashboard
+          chown ec2-user:ec2-user /opt/medislot-dashboard
+
+          cat > /opt/medislot-dashboard/.env <<'ENVVARS'
+          API_BASE_URL=${ApiBaseUrl}
+          FLASK_SECRET_KEY=${FlaskSecret}
+          SESSION_COOKIE_SECURE=0
+          ENVVARS
+
+          chmod 600 /opt/medislot-dashboard/.env
+          chown ec2-user:ec2-user /opt/medislot-dashboard/.env
+
+Outputs:
+  DashboardInstanceId:
+    Description: Dashboard EC2 instance ID.
+    Value: !Ref DashboardInstance
+
+  DashboardPublicIp:
+    Description: Dashboard public IP.
+    Value: !GetAtt DashboardInstance.PublicIp
+
+  DashboardUrl:
+    Description: Dashboard HTTP URL.
+    Value: !Sub http://${DashboardInstance.PublicDnsName}
