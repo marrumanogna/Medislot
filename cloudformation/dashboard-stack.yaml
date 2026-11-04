@@ -8,10 +8,6 @@ Parameters:
     Type: String
     Default: dev
 
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Default: vpc-07aaef20c1e2c9fd8
-
   PublicSubnetId:
     Type: AWS::EC2::Subnet::Id
     Default: subnet-0305c2728b827421c
