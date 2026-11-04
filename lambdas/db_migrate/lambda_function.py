@@ -140,23 +140,6 @@ def migrate_m4_doctor_search(cur):
         "cities_backfilled": 0,
     }
 
-    # Check whether the required base table exists before migration.
-    cur.execute(
-        """
-        SELECT 1
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'doctor_profiles'
-        """
-    )
-
-    if cur.fetchone() is None:
-        raise RuntimeError(
-            "Required table doctor_profiles does not exist. "
-            "Initialize or repair the base database schema before "
-            "running the Milestone 4 migration."
-        )
-
     # Add hospital_city column.
     if ensure_column(
         cur,
@@ -429,29 +412,10 @@ def handler(event, context):
 
                     result["applied"].append(name)
 
-            # Verify indexes only when the doctor_profiles table exists.
-            cur.execute(
-                """
-                SELECT 1
-                FROM information_schema.TABLES
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'doctor_profiles'
-                """
+            # Verify expected doctor search indexes.
+            result["doctor_search_indexes"] = (
+                verify_doctor_search_indexes(cur)
             )
-
-            doctor_profiles_exists = (
-                cur.fetchone() is not None
-            )
-
-            if doctor_profiles_exists:
-                result["doctor_search_indexes"] = (
-                    verify_doctor_search_indexes(cur)
-                )
-            else:
-                result["doctor_search_indexes"] = {
-                    index: False
-                    for index, _ in DOCTOR_SEARCH_INDEXES
-                }
 
         # Verify completed migration.
         if (
