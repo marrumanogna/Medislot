@@ -177,6 +177,24 @@ def handler(event, context):
 
     try:
         conn = dbconn(config())
+                if event.get("diagnostic"):
+            with conn.cursor() as cur:
+                cur.execute("SELECT DATABASE() AS database_name")
+                database = cur.fetchone()
+
+                cur.execute("""
+                    SELECT TABLE_NAME
+                    FROM information_schema.TABLES
+                    WHERE TABLE_SCHEMA = DATABASE()
+                    ORDER BY TABLE_NAME
+                """)
+                tables = [row["TABLE_NAME"] for row in cur.fetchall()]
+
+            return {
+                "database": database["database_name"],
+                "doctor_profiles_exists": "doctor_profiles" in tables,
+                "tables": tables
+            }
 
         with conn.cursor() as cur:
             cur.execute("SELECT GET_LOCK(%s, 30) AS got", (LOCK_NAME,))
