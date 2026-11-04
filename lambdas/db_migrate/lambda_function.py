@@ -1,21 +1,29 @@
+
 """Idempotent schema migrations, run by CI after every deployment.
 
 Why this exists
 ---------------
 scehma/schema.sql is a clean-install script, but the live RDS instance already
-holds data and has drifted from that file over earlier milestones. Milestone 4
-needs a new column and several indexes on a populated table, so the change is
-applied here, defensively:
+holds data and has drifted from that file over earlier milestones.
 
-* every step inspects information_schema first and is a no-op when the object
-  already exists (so it is safe on a fresh install built from schema.sql, on
-  the live database, and when CI re-runs it);
-* applied migrations are recorded in schema_migrations;
-* a MySQL advisory lock stops two deployments migrating at once;
-* any failure raises, so `aws lambda invoke` reports FunctionError and CI fails.
+Milestone 4 needs a new column and several indexes on doctor_profiles.
+The migration applies those changes defensively after verifying that the
+required base table exists.
 
-Invoke with {"dry_run": true} to list pending migrations without changing
-anything.
+Features:
+* Information-schema checks before adding columns and indexes.
+* Applied migrations recorded in schema_migrations.
+* MySQL advisory lock prevents concurrent migrations.
+* Diagnostic mode reports the existing database schema without modifying it.
+* Any migration failure raises an exception so CI fails.
+ 
+Invoke with:
+    {"dry_run": true}
+to list pending migrations.
+
+Invoke with:
+    {"diagnostic": true}
+to inspect the live database.
 """
 
 import logging
@@ -33,6 +41,7 @@ _IDENT = re.compile(r"^[A-Za-z0-9_]+$")
 # --------------------------------------------------------------------------- #
 # Idempotent DDL helpers
 # --------------------------------------------------------------------------- #
+
 def _ident(name):
     """Table/column/index names are interpolated into DDL, so validate them."""
     if not _IDENT.match(name):
@@ -71,57 +80,95 @@ def index_exists(cur, table, index):
 
 def ensure_column(cur, table, column, definition):
     """ALTER TABLE ... ADD COLUMN unless it already exists. True if added."""
-    _ident(table), _ident(column)
+    _ident(table)
+    _ident(column)
+
     if column_exists(cur, table, column):
         return False
-    cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    cur.execute(
+        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    )
     return True
 
 
 def ensure_index(cur, table, index, columns):
     """CREATE INDEX unless an index of that name exists. True if created."""
-    _ident(table), _ident(index)
+    _ident(table)
+    _ident(index)
+
     if index_exists(cur, table, index):
         return False
-    cols = ", ".join(_ident(c) for c in columns)
-    cur.execute(f"CREATE INDEX {index} ON {table} ({cols})")
+
+    cols = ", ".join(_ident(column) for column in columns)
+
+    cur.execute(
+        f"CREATE INDEX {index} ON {table} ({cols})"
+    )
     return True
 
 
 # --------------------------------------------------------------------------- #
-# Milestone 4: doctor discovery
+# Milestone 4: Doctor discovery
 # --------------------------------------------------------------------------- #
-# Index choices are justified in docs/milestone-4.md. In short, every doctor
-# search filter is either an equality or a case-insensitive *prefix* match,
-# so each can be served by a B-tree range scan.
+
+# Index choices are justified in docs/milestone-4.md.
+# Every doctor search filter is either an equality or a prefix match.
+
 DOCTOR_SEARCH_INDEXES = (
-    # specialisation (equality) [+ city (prefix)] - the most common combination.
-    # Its left-most column also serves specialisation-only searches.
+    # Specialization + city
     ("idx_doctor_spec_city", ("specialization", "hospital_city")),
-    # city-only searches (specialisation is not the leading column there).
+
+    # City-only searches
     ("idx_doctor_city", ("hospital_city",)),
+
+    # Hospital name searches
     ("idx_doctor_hospital_name", ("hospital_name",)),
-    # name search: prefix of the full name ...
+
+    # Full-name searches
     ("idx_doctor_full_name", ("full_name",)),
-    # ... or prefix of the surname (last word of the full name).
+
+    # Surname searches
     ("idx_doctor_surname", ("name_last_word",)),
 )
 
 
 def migrate_m4_doctor_search(cur):
-    changes = {"columns_added": [], "indexes_added": [], "cities_backfilled": 0}
+    changes = {
+        "columns_added": [],
+        "indexes_added": [],
+        "cities_backfilled": 0,
+    }
 
-    # The city the search filters on. doctor_profiles only had a free-text
-    # hospital_address, which no B-tree index can serve for "city = ?".
+    # Check whether the required base table exists before migration.
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'doctor_profiles'
+        """
+    )
+
+    if cur.fetchone() is None:
+        raise RuntimeError(
+            "Required table doctor_profiles does not exist. "
+            "Initialize or repair the base database schema before "
+            "running the Milestone 4 migration."
+        )
+
+    # Add hospital_city column.
     if ensure_column(
         cur,
         "doctor_profiles",
         "hospital_city",
         "VARCHAR(100) NULL AFTER hospital_address",
     ):
-        changes["columns_added"].append("doctor_profiles.hospital_city")
+        changes["columns_added"].append(
+            "doctor_profiles.hospital_city"
+        )
 
-    # Surname = last word of full_name, materialised so it can be indexed.
+    # Add generated surname column.
     if ensure_column(
         cur,
         "doctor_profiles",
@@ -129,125 +176,305 @@ def migrate_m4_doctor_search(cur):
         "VARCHAR(201) GENERATED ALWAYS AS "
         "(SUBSTRING_INDEX(full_name, ' ', -1)) STORED",
     ):
-        changes["columns_added"].append("doctor_profiles.name_last_word")
+        changes["columns_added"].append(
+            "doctor_profiles.name_last_word"
+        )
 
-    # Best-effort backfill for doctors registered before this column existed.
-    # Never overwrites a city a doctor already set.
+    # Backfill missing cities without overwriting existing values.
     cur.execute(
-        "SELECT user_id, hospital_address FROM doctor_profiles "
-        "WHERE hospital_city IS NULL"
+        """
+        SELECT user_id, hospital_address
+        FROM doctor_profiles
+        WHERE hospital_city IS NULL
+        """
     )
+
     for row in cur.fetchall():
         city = derive_city(row["hospital_address"])
+
         if city:
             cur.execute(
-                "UPDATE doctor_profiles SET hospital_city = %s "
-                "WHERE user_id = %s AND hospital_city IS NULL",
+                """
+                UPDATE doctor_profiles
+                SET hospital_city = %s
+                WHERE user_id = %s
+                  AND hospital_city IS NULL
+                """,
                 (city, row["user_id"]),
             )
+
             changes["cities_backfilled"] += 1
 
+    # Create expected search indexes.
     for index, columns in DOCTOR_SEARCH_INDEXES:
-        if ensure_index(cur, "doctor_profiles", index, columns):
+        if ensure_index(
+            cur,
+            "doctor_profiles",
+            index,
+            columns,
+        ):
             changes["indexes_added"].append(index)
 
     return changes
 
 
-MIGRATIONS = (("m4_001_doctor_search", migrate_m4_doctor_search),)
+MIGRATIONS = (
+    ("m4_001_doctor_search", migrate_m4_doctor_search),
+)
 
 
 # --------------------------------------------------------------------------- #
-# Runner
+# Verification
 # --------------------------------------------------------------------------- #
+
 def verify_doctor_search_indexes(cur):
-    """Report which of the expected search indexes are present."""
+    """Report which expected doctor search indexes are present."""
+
     return {
-        index: index_exists(cur, "doctor_profiles", index)
+        index: index_exists(
+            cur,
+            "doctor_profiles",
+            index,
+        )
         for index, _ in DOCTOR_SEARCH_INDEXES
     }
 
 
+# --------------------------------------------------------------------------- #
+# Database diagnostic
+# --------------------------------------------------------------------------- #
+
+def get_database_diagnostic(cur):
+    """
+    Read-only inspection of the connected database.
+
+    This function does not create, update, or delete database objects.
+    """
+
+    # Database name
+    cur.execute(
+        "SELECT DATABASE() AS database_name"
+    )
+    database = cur.fetchone()
+
+    # Existing tables
+    cur.execute(
+        """
+        SELECT TABLE_NAME
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+        ORDER BY TABLE_NAME
+        """
+    )
+
+    tables = [
+        row["TABLE_NAME"]
+        for row in cur.fetchall()
+    ]
+
+    doctor_profiles_exists = (
+        "doctor_profiles" in tables
+    )
+
+    # Users count
+    users_count = None
+    user_columns = []
+
+    if "users" in tables:
+        cur.execute(
+            "SELECT COUNT(*) AS users_count FROM users"
+        )
+        users_count = cur.fetchone()["users_count"]
+
+        # Existing users table structure
+        cur.execute(
+            """
+            SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'users'
+            ORDER BY ORDINAL_POSITION
+            """
+        )
+
+        user_columns = cur.fetchall()
+
+    # Applied migration records
+    applied_migrations = []
+
+    if "schema_migrations" in tables:
+        cur.execute(
+            """
+            SELECT migration_id
+            FROM schema_migrations
+            ORDER BY migration_id
+            """
+        )
+
+        applied_migrations = [
+            row["migration_id"]
+            for row in cur.fetchall()
+        ]
+
+    return {
+        "status": "diagnostic_completed",
+        "database": database["database_name"],
+        "doctor_profiles_exists": doctor_profiles_exists,
+        "users_count": users_count,
+        "user_columns": user_columns,
+        "applied_migrations": applied_migrations,
+        "tables": tables,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Migration runner
+# --------------------------------------------------------------------------- #
+
 def handler(event, context):
     event = event or {}
+
     cid = event.get("correlationId")
     dry_run = bool(event.get("dry_run"))
+
     conn = None
     locked = False
 
     try:
         conn = dbconn(config())
+
+        # Diagnostic mode: read-only inspection.
         if event.get("diagnostic"):
             with conn.cursor() as cur:
-                cur.execute("SELECT DATABASE() AS database_name")
-                database = cur.fetchone()
+                result = get_database_diagnostic(cur)
 
-                cur.execute("""
-                    SELECT TABLE_NAME
-                    FROM information_schema.TABLES
-                    WHERE TABLE_SCHEMA = DATABASE()
-                    ORDER BY TABLE_NAME
-                """)
-                tables = [row["TABLE_NAME"] for row in cur.fetchall()]
+            return result
 
-            return {
-                "database": database["database_name"],
-                "doctor_profiles_exists": "doctor_profiles" in tables,
-                "tables": tables
-            }
-
+        # Normal migration mode.
         with conn.cursor() as cur:
-            cur.execute("SELECT GET_LOCK(%s, 30) AS got", (LOCK_NAME,))
-            locked = cur.fetchone()["got"] == 1
-            if not locked:
-                raise RuntimeError("Another migration is already running")
 
+            # Acquire advisory lock.
+            cur.execute(
+                "SELECT GET_LOCK(%s, 30) AS got",
+                (LOCK_NAME,),
+            )
+
+            locked = cur.fetchone()["got"] == 1
+
+            if not locked:
+                raise RuntimeError(
+                    "Another migration is already running"
+                )
+
+            # Ensure migration tracking table exists.
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     migration_id VARCHAR(100) NOT NULL,
-                    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    applied_at TIMESTAMP NOT NULL
+                        DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (migration_id)
                 ) ENGINE=InnoDB
                 """
             )
-            cur.execute("SELECT migration_id FROM schema_migrations")
-            done = {row["migration_id"] for row in cur.fetchall()}
 
-            pending = [m for m in MIGRATIONS if m[0] not in done]
+            # Read completed migrations.
+            cur.execute(
+                "SELECT migration_id FROM schema_migrations"
+            )
+
+            done = {
+                row["migration_id"]
+                for row in cur.fetchall()
+            }
+
+            pending = [
+                migration
+                for migration in MIGRATIONS
+                if migration[0] not in done
+            ]
+
             result = {
                 "status": "ok",
                 "dry_run": dry_run,
                 "already_applied": sorted(done),
                 "applied": [],
-                "pending": [name for name, _ in pending] if dry_run else [],
+                "pending": (
+                    [name for name, _ in pending]
+                    if dry_run
+                    else []
+                ),
                 "changes": {},
             }
 
+            # Apply pending migrations.
             if not dry_run:
                 for name, migrate in pending:
-                    logger.info("Applying migration %s", name)
+                    logger.info(
+                        "Applying migration %s",
+                        name,
+                    )
+
                     result["changes"][name] = migrate(cur)
+
                     cur.execute(
-                        "INSERT INTO schema_migrations (migration_id) "
-                        "VALUES (%s)",
+                        """
+                        INSERT INTO schema_migrations (migration_id)
+                        VALUES (%s)
+                        """,
                         (name,),
                     )
+
                     conn.commit()
+
                     result["applied"].append(name)
 
-            result["doctor_search_indexes"] = verify_doctor_search_indexes(cur)
+            # Verify indexes only when the doctor_profiles table exists.
+            cur.execute(
+                """
+                SELECT 1
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'doctor_profiles'
+                """
+            )
 
-        if not dry_run and not all(result["doctor_search_indexes"].values()):
+            doctor_profiles_exists = (
+                cur.fetchone() is not None
+            )
+
+            if doctor_profiles_exists:
+                result["doctor_search_indexes"] = (
+                    verify_doctor_search_indexes(cur)
+                )
+            else:
+                result["doctor_search_indexes"] = {
+                    index: False
+                    for index, _ in DOCTOR_SEARCH_INDEXES
+                }
+
+        # Verify completed migration.
+        if (
+            not dry_run
+            and not all(
+                result["doctor_search_indexes"].values()
+            )
+        ):
             raise RuntimeError(
                 "Migration finished but expected indexes are missing: "
                 f"{result['doctor_search_indexes']}"
             )
 
-        emit("info", "schema_migration_completed", cid, **{
-            "applied": result["applied"],
-            "dry_run": dry_run,
-        })
+        emit(
+            "info",
+            "schema_migration_completed",
+            cid,
+            **{
+                "applied": result["applied"],
+                "dry_run": dry_run,
+            },
+        )
+
         return result
 
     except Exception:
@@ -256,7 +483,13 @@ def handler(event, context):
                 conn.rollback()
             except Exception:
                 pass
-        emit("error", "schema_migration_failed", cid)
+
+        emit(
+            "error",
+            "schema_migration_failed",
+            cid,
+        )
+
         raise
 
     finally:
@@ -264,7 +497,11 @@ def handler(event, context):
             try:
                 if locked:
                     with conn.cursor() as cur:
-                        cur.execute("SELECT RELEASE_LOCK(%s)", (LOCK_NAME,))
+                        cur.execute(
+                            "SELECT RELEASE_LOCK(%s)",
+                            (LOCK_NAME,),
+                        )
             except Exception:
                 pass
+
             conn.close()
