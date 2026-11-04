@@ -6,7 +6,9 @@ on:
     branches: [master]
 
   push:
-    branches: [feature/milestone-2]
+    branches: 
+      - feature/milestone-2
+      - feature/milestone-4
     paths:
       - "cloudformation/**"
       - "lambdas/**"
