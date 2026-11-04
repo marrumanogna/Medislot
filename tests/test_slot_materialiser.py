@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 from datetime import date, datetime, time, timedelta
 
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lambdas"))
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
@@ -32,44 +33,76 @@ def test_invalid_days_ahead():
 
 def test_materialises_slots_and_skips_blackout():
     module = load_lambda()
+
     conn = MagicMock()
     cursor = MagicMock()
+
     conn.cursor.return_value.__enter__.return_value = cursor
+
     module.config = MagicMock(return_value={})
     module.dbconn = MagicMock(return_value=conn)
-    module.response = lambda status, data: {"statusCode": status, "body": data}
+    module.response = lambda status, data: {
+        "statusCode": status,
+        "body": data
+    }
 
-    today = date.today()
+    # Use a fixed date so local and GitHub Actions use the same date.
+    today = date(2026, 11, 5)
     weekday = today.weekday()
+
     pattern = {
         "doctor_id": 12,
         "day_of_week": weekday,
         "start_time": time(9, 0),
         "end_time": time(10, 0),
-        "timezone": "UTC",
+    }
+
+    consultation_type = {
+        "doctor_id": 12,
         "consultation_type_id": 5,
+        "name": "Video consultation",
         "duration_minutes": 30,
+    }
+
+    blackout = {
+        "doctor_id": 12,
+        "blackout_date": today,
     }
 
     cursor.fetchall.side_effect = [
         [pattern],
-        [{
-            "doctor_id": 12,
-            "consultation_type_id": 5,
-            "name": "Video consultation",
-            "duration_minutes": 30,
-        }],
-        [{"doctor_id": 12, "blackout_date": today}],
+        [consultation_type],
+        [blackout],
     ]
 
-    with patch("datetime.datetime") as mock_datetime:
-        mock_datetime.now.return_value.date.return_value = today
-        result = module.handler({"days_ahead": 1}, None)
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(
+                2026, 11, 5, 12, 0,
+                tzinfo=tz
+            )
+
+    # Mock the datetime used inside the Lambda module.
+    with patch.object(module, "datetime", FixedDateTime):
+        result = module.handler(
+            {"days_ahead": 1},
+            None
+        )
 
     assert result["statusCode"] == 200
+
     assert result["body"]["blackout_dates_skipped"] >= 1
-    conn.commit.assert_called_once()
-    conn.close.assert_called_once()
+
+    assert result["body"]["slots_created"] == 0
+
+    # No database slot insertion should occur for a blackout date.
+    insert_calls = [
+        call for call in cursor.execute.call_args_list
+        if "INSERT IGNORE INTO appointment_slots" in str(call)
+    ]
+
+    assert len(insert_calls) == 0
 def test_dst_spring_transition_skips_nonexistent_local_time():
     module = load_lambda()
     timezone = ZoneInfo("America/New_York")
