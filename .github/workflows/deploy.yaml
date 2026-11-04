@@ -325,7 +325,7 @@ jobs:
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           BUCKET="medislot-${ENVIRONMENT}-artifacts-v2-${AWS_ACCOUNT_ID}"
 
-          for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule; do
+          for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule doctor_slot_management; do
             tmp="$(mktemp -d)"
 
             cp -R "lambdas/${fn}/." "$tmp/"

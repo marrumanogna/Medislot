@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Sign Up — MediSlot{% endblock %}
+{% block body %}
+<div class="auth">
+  <aside class="auth-side">
+    {% include "partials/brand.html" %}
+    <div>
+      <h2>Care that fits your calendar.</h2>
+      <p>Create an account to book appointments, or to publish your availability as a doctor.</p>
+      <ul>
+        <li>{{ icon('check') }}Patients: search doctors and book open slots</li>
+        <li>{{ icon('check') }}Doctors: manage hours, fees and your daily schedule</li>
+        <li>{{ icon('check') }}Your password is stored securely hashed</li>
+      </ul>
+    </div>
+    <small style="color:#8fa9bf">© 2026 MediSlot</small>
+    <div class="ring"></div>
+  </aside>
+
+  <main class="auth-main">
+    <div class="auth-top">{% include "partials/brand.html" %}</div>
+
+    <!-- Step 0: choose role -->
+    <div class="auth-card" id="pick">
+      <h1>Who are you registering as?</h1>
+      <p class="sub">Pick one. You can't use the same email for both roles.</p>
+      <div class="role-cards">
+        <button class="role-card" type="button" data-role="patient">{{ icon('user') }}<strong>Patient</strong><span>Find doctors and book appointments</span></button>
+        <button class="role-card" type="button" data-role="doctor">{{ icon('steth') }}<strong>Doctor</strong><span>Publish availability and manage your day</span></button>
+      </div>
+      <p class="auth-foot">Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
+    </div>
+
+    <!-- Patient form -->
+    <div class="auth-card reg-wide hidden" id="patient-panel">
+      <button class="btn btn-quiet btn-sm back" type="button" style="margin-left:-12px">← Change role</button>
+      <h1 style="margin-top:6px">Create a patient account</h1>
+      <p class="sub">Only name, email and password are required. The rest helps your doctor.</p>
+      <form id="patient-form" novalidate>
+        <div class="form-grid">
+          <div class="fieldset-title">Account details</div>
+          <div class="field"><label for="p-first">First name</label><input class="input" id="p-first" name="firstName" autocomplete="given-name" required></div>
+          <div class="field"><label for="p-last">Last name</label><input class="input" id="p-last" name="lastName" autocomplete="family-name" required></div>
+          <div class="field full"><label for="p-email">Email</label><input class="input" id="p-email" name="email" type="email" autocomplete="email" required></div>
+          <div class="field"><label for="p-pw">Password</label><input class="input" id="p-pw" name="password" type="password" autocomplete="new-password" required><span class="hint">At least 10 characters, with a letter and a number.</span></div>
+          <div class="field"><label for="p-pw2">Confirm password</label><input class="input" id="p-pw2" name="confirmPassword" type="password" autocomplete="new-password" required></div>
+          <div class="fieldset-title" style="margin-top:8px">About you (optional)</div>
+          <div class="field"><label for="p-dob">Date of birth</label><input class="input" id="p-dob" name="dateOfBirth" type="date"></div>
+          <div class="field"><label for="p-gender">Gender</label>
+            <select class="input" id="p-gender" name="gender"><option value="">Prefer not to say</option><option>Female</option><option>Male</option><option>Non-binary</option><option>Other</option></select></div>
+          <div class="field"><label for="p-phone">Phone</label><input class="input" id="p-phone" name="phone" type="tel" maxlength="20" autocomplete="tel"></div>
+          <div class="field"><label for="p-city">City</label><input class="input" id="p-city" name="city" autocomplete="address-level2"></div>
+          <div class="field full"><label for="p-address">Address</label><input class="input" id="p-address" name="address" autocomplete="street-address"></div>
+          <div class="field full"><label for="p-emerg">Emergency contact number</label><input class="input" id="p-emerg" name="emergencyContact" type="tel" maxlength="20"></div>
+        </div>
+        <div class="alert alert-error hidden form-error" role="alert"></div>
+        <button class="btn btn-primary btn-block btn-lg" type="submit" data-busy="Creating account…">Create account</button>
+      </form>
+    </div>
+
+    <!-- Doctor form (two steps) -->
+    <div class="auth-card reg-wide hidden" id="doctor-panel">
+      <button class="btn btn-quiet btn-sm back" type="button" style="margin-left:-12px">← Change role</button>
+      <h1 style="margin-top:6px">Create a doctor account</h1>
+      <p class="sub" id="doc-sub">Step 1 of 2 — Account details</p>
+      <div class="reg-steps" aria-hidden="true"><i class="on"></i><i id="bar2"></i></div>
+      <form id="doctor-form" novalidate>
+        <div class="form-grid" data-step="1">
+          <div class="field"><label for="d-first">First name</label><input class="input" id="d-first" name="firstName" autocomplete="given-name" required></div>
+          <div class="field"><label for="d-last">Last name</label><input class="input" id="d-last" name="lastName" autocomplete="family-name" required></div>
+          <div class="field full"><label for="d-email">Email</label><input class="input" id="d-email" name="email" type="email" autocomplete="email" required></div>
+          <div class="field"><label for="d-pw">Password</label><input class="input" id="d-pw" name="password" type="password" autocomplete="new-password" required><span class="hint">At least 10 characters, with a letter and a number.</span></div>
+          <div class="field"><label for="d-pw2">Confirm password</label><input class="input" id="d-pw2" name="confirmPassword" type="password" autocomplete="new-password" required></div>
+        </div>
+        <div class="form-grid hidden" data-step="2">
+          <div class="field"><label for="d-lic">Medical licence number</label><input class="input" id="d-lic" name="licenceNumber" required></div>
+          <div class="field"><label for="d-spec">Specialization</label><input class="input" id="d-spec" name="specialization" list="spec-list" required placeholder="e.g. Cardiology">
+            <datalist id="spec-list"><option>General Physician</option><option>Cardiology</option><option>Dermatology</option><option>Neurology</option><option>Orthopedics</option><option>Pediatrics</option><option>Psychiatry</option><option>Gynecology</option><option>ENT</option><option>Ophthalmology</option><option>Dentistry</option></datalist></div>
+          <div class="field full"><span class="label">Qualifications</span><div class="tags" id="d-qual"><input aria-label="Qualifications" placeholder="e.g. MBBS, MD — press Enter after each"></div></div>
+          <div class="field"><label for="d-exp">Years of experience</label><input class="input" id="d-exp" name="experienceYears" type="number" min="0" max="80" step="1" required></div>
+          <div class="field"><label for="d-fee">Consultation fee</label><input class="input" id="d-fee" name="consultationFee" type="number" min="0" step="0.01" placeholder="e.g. 500"></div>
+          <div class="field full"><label for="d-hosp">Hospital / clinic name</label><input class="input" id="d-hosp" name="hospitalName" required></div>
+          <div class="field full"><label for="d-addr">Hospital / clinic address</label><input class="input" id="d-addr" name="hospitalAddress" required></div>
+          <div class="field full"><span class="label">Languages spoken</span><div class="tags" id="d-lang"><input aria-label="Languages spoken" placeholder="e.g. English, Hindi — press Enter after each"></div></div>
+          <div class="field full"><label for="d-tz">Timezone</label><input class="input" id="d-tz" name="timezone" list="tz-list" required><datalist id="tz-list"></datalist><span class="hint">Your availability is set in this timezone.</span></div>
+          <div class="field full"><label for="d-bio">Bio</label><textarea class="input" id="d-bio" name="bio" maxlength="5000" placeholder="A short introduction patients will see"></textarea></div>
+        </div>
+        <div class="alert alert-error hidden form-error" role="alert"></div>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-ghost btn-lg hidden" type="button" id="doc-prev">Back</button>
+          <button class="btn btn-primary btn-lg" type="button" id="doc-next" style="flex:1">Continue</button>
+          <button class="btn btn-primary btn-lg hidden" type="submit" id="doc-submit" style="flex:1" data-busy="Creating account…">Create account</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Success -->
+    <div class="auth-card hidden" id="done">
+      <div class="success-panel">
+        <div class="tick">{{ icon('check') }}</div>
+        <h1>You're registered</h1>
+        <p class="sub">Your account is ready. Taking you to the login page…</p>
+        <a class="btn btn-primary" id="done-link" href="/login">Go to login</a>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { $, $$, esc, withBusy, tagInput, fillTimezones } = MS;
+  const csrf = document.querySelector('meta[name=csrf]').content;
+  const panels = { pick: $('#pick'), patient: $('#patient-panel'), doctor: $('#doctor-panel'), done: $('#done') };
+  let role = '';
+
+  function show(name) {
+    Object.entries(panels).forEach(([k, el]) => el.classList.toggle('hidden', k !== name));
+    window.scrollTo({ top: 0 });
+  }
+  function choose(r) { role = r; show(r); history.replaceState(null, '', '/register?role=' + r); $('#' + r + '-panel input')?.focus(); }
+  $$('.role-card').forEach(b => b.addEventListener('click', () => choose(b.dataset.role)));
+  $$('.back').forEach(b => b.addEventListener('click', () => { role = ''; show('pick'); history.replaceState(null, '', '/register'); }));
+
+  const quals = tagInput($('#d-qual')), langs = tagInput($('#d-lang'));
+  fillTimezones($('#tz-list'));
+  try { $('#d-tz').value = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) {}
+
+  function mark(input, msg) {
+    input.setAttribute('aria-invalid', 'true');
+    let e = input.parentElement.querySelector('.err');
+    if (!e) { e = document.createElement('span'); e.className = 'err'; input.parentElement.appendChild(e); }
+    e.textContent = msg;
+  }
+  function clearMarks(form) {
+    $$('[aria-invalid]', form).forEach(i => i.removeAttribute('aria-invalid'));
+    $$('.err', form).forEach(e => e.remove());
+    form.querySelector('.form-error').classList.add('hidden');
+  }
+  function validateAccount(form, scope) {
+    let first = null;
+    const bad = (el, m) => { mark(el, m); first = first || el; };
+    const f = n => $(`[name=${n}]`, scope);
+    if (!f('firstName').value.trim()) bad(f('firstName'), 'Enter your first name.');
+    if (!f('lastName').value.trim()) bad(f('lastName'), 'Enter your last name.');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f('email').value.trim())) bad(f('email'), 'Enter a valid email address.');
+    const pw = f('password').value;
+    if (pw.length < 10 || !/[A-Za-z]/.test(pw) || !/\d/.test(pw)) bad(f('password'), 'Use 10+ characters with a letter and a number.');
+    if (f('confirmPassword').value !== pw) bad(f('confirmPassword'), "Passwords don't match.");
+    first?.focus();
+    return !first;
+  }
+  function validateDoctorPro(form) {
+    let first = null;
+    const bad = (el, m) => { mark(el, m); first = first || el; };
+    const f = n => $(`[name=${n}]`, form);
+    ['licenceNumber', 'specialization', 'hospitalName', 'hospitalAddress', 'timezone'].forEach(n => { if (!f(n).value.trim()) bad(f(n), 'This field is required.'); });
+    if (!quals.get().length) bad($('#d-qual input'), 'Add at least one qualification.');
+    if (!langs.get().length) bad($('#d-lang input'), 'Add at least one language.');
+    const exp = f('experienceYears').value;
+    if (!/^\d+$/.test(exp) || +exp > 80) bad(f('experienceYears'), 'Enter 0–80 whole years.');
+    const fee = f('consultationFee').value;
+    if (fee !== '' && (+fee < 0 || !/^\d+(\.\d{1,2})?$/.test(fee))) bad(f('consultationFee'), 'Use a positive amount with up to 2 decimals.');
+    first?.focus();
+    return !first;
+  }
+
+  async function submit(form, payload, btn) {
+    const box = form.querySelector('.form-error');
+    box.classList.add('hidden');
+    await withBusy(btn, async () => {
+      let res, data = {};
+      try {
+        res = await fetch('/register/' + role, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(payload) });
+        data = await res.json().catch(() => ({}));
+      } catch (e) { data = { message: 'Could not reach MediSlot. Check your connection and try again.' }; }
+      if (res && res.ok) {
+        show('done');
+        setTimeout(() => { location.href = '/login?registered=1&role=' + role; }, 2200);
+        $('#done-link').href = '/login?registered=1&role=' + role;
+        return;
+      }
+      let msg = data.message || 'Registration failed. Please try again.';
+      if (data.missingFields) msg += ' Missing: ' + data.missingFields.join(', ') + '.';
+      box.textContent = msg; box.classList.remove('hidden');
+      box.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  $('#patient-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.target; clearMarks(form);
+    if (!validateAccount(form, form)) return;
+    const v = n => $(`[name=${n}]`, form).value.trim();
+    const payload = { firstName: v('firstName'), lastName: v('lastName'), email: v('email'),
+      password: $('[name=password]', form).value, confirmPassword: $('[name=confirmPassword]', form).value };
+    ['dateOfBirth', 'gender', 'phone', 'address', 'city', 'emergencyContact'].forEach(n => { if (v(n)) payload[n] = v(n); });
+    submit(form, payload, form.querySelector('button[type=submit]'));
+  });
+
+  // Doctor wizard
+  const dform = $('#doctor-form');
+  function step(n) {
+    $$('[data-step]', dform).forEach(s => s.classList.toggle('hidden', s.dataset.step != n));
+    $('#doc-prev').classList.toggle('hidden', n === 1);
+    $('#doc-next').classList.toggle('hidden', n === 2);
+    $('#doc-submit').classList.toggle('hidden', n === 1);
+    $('#bar2').classList.toggle('on', n === 2);
+    $('#doc-sub').textContent = n === 1 ? 'Step 1 of 2 — Account details' : 'Step 2 of 2 — Professional details';
+    window.scrollTo({ top: 0 });
+  }
+  $('#doc-next').addEventListener('click', () => { clearMarks(dform); if (validateAccount(dform, $('[data-step="1"]', dform))) step(2); });
+  $('#doc-prev').addEventListener('click', () => step(1));
+  dform.addEventListener('submit', (e) => {
+    e.preventDefault(); clearMarks(dform);
+    if (!validateDoctorPro(dform)) return;
+    const g = n => $(`[name=${n}]`, dform).value;
+    const payload = {
+      firstName: g('firstName').trim(), lastName: g('lastName').trim(), email: g('email').trim(),
+      password: g('password'), confirmPassword: g('confirmPassword'),
+      licenceNumber: g('licenceNumber').trim(), specialization: g('specialization').trim(),
+      qualifications: quals.get(), experienceYears: parseInt(g('experienceYears'), 10),
+      hospitalName: g('hospitalName').trim(), hospitalAddress: g('hospitalAddress').trim(),
+      languagesSpoken: langs.get(), timezone: g('timezone').trim(),
+    };
+    if (g('consultationFee') !== '') payload.consultationFee = parseFloat(g('consultationFee'));
+    if (g('bio').trim()) payload.bio = g('bio').trim();
+    submit(dform, payload, $('#doc-submit'));
+  });
+
+  const initial = new URLSearchParams(location.search).get('role');
+  if (initial === 'patient' || initial === 'doctor') choose(initial);
+})();
+</script>
+{% endblock %}

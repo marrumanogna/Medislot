@@ -1,0 +1,21 @@
+{% extends "portal.html" %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+<section class="card">
+  <form id="search-form" class="card-body" novalidate>
+    <div class="form-grid" style="grid-template-columns:repeat(4,minmax(0,1fr)) auto;align-items:end">
+      <div class="field"><label for="q-spec">Specialization</label><input class="input" id="q-spec" name="specialisation" placeholder="e.g. Cardiology"></div>
+      <div class="field"><label for="q-name">Doctor name</label><input class="input" id="q-name" name="name"></div>
+      <div class="field"><label for="q-hosp">Hospital</label><input class="input" id="q-hosp" name="hospital"></div>
+      <div class="field"><label for="q-city">City</label><input class="input" id="q-city" name="city"></div>
+      <button class="btn btn-primary" type="submit" data-busy="Searching…">{{ icon('search') }}Search</button>
+    </div>
+  </form>
+</section>
+<div id="results"></div>
+<dialog id="doc-dlg"><div class="dlg">
+  <div class="dlg-head"><h2 id="dd-name"></h2><p id="dd-meta"></p></div>
+  <div class="dlg-body" id="dd-body"></div>
+  <div class="dlg-foot"><button class="btn btn-ghost" id="dd-close" type="button">Close</button><button class="btn btn-teal" id="dd-book" type="button" disabled data-busy="Booking…">Book appointment</button></div>
+</div></dialog>
+{% endblock %}

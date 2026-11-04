@@ -1,4 +1,3 @@
-
 import logging
 from datetime import date
 
@@ -9,12 +8,17 @@ logger.setLevel(logging.INFO)
 
 
 def handler(event, context):
+    logger.info("Blackout dates Lambda execution started")
+
     # Get authenticated doctor details from API Gateway authorizer
     auth = (
         (event.get("requestContext") or {}).get("authorizer") or {}
     )
 
+    logger.info("Checking doctor authorization")
+
     if auth.get("role") != "DOCTOR" or not auth.get("userId"):
+        logger.warning("Access denied: Doctor authorization required")
         return response(403, {
             "message": "Doctor access required"
         })
@@ -34,6 +38,11 @@ def handler(event, context):
         params = event.get("pathParameters") or {}
         blackout_id = params.get("blackout_id")
 
+        logger.info(
+            "Request received: doctor_id=%s, method=%s, blackout_id=%s",
+            doctor_id, method, blackout_id
+        )
+
         # Validate blackout ID
         if blackout_id is not None:
             try:
@@ -41,6 +50,7 @@ def handler(event, context):
                 if blackout_id <= 0:
                     raise ValueError
             except (TypeError, ValueError):
+                logger.warning("Invalid blackout_id received")
                 return response(400, {
                     "message": "Invalid blackout_id"
                 })
@@ -52,11 +62,13 @@ def handler(event, context):
             try:
                 data = body(event)
             except (ValueError, TypeError):
+                logger.warning("Invalid JSON body received")
                 return response(400, {
                     "message": "Invalid JSON body"
                 })
 
             if not isinstance(data, dict):
+                logger.warning("Request body must be a JSON object")
                 return response(400, {
                     "message": "Request body must be a JSON object"
                 })
@@ -71,6 +83,7 @@ def handler(event, context):
                     raise ValueError
 
             except (TypeError, ValueError):
+                logger.warning("Invalid blackout_date format received")
                 return response(400, {
                     "message": "blackout_date must use YYYY-MM-DD format"
                 })
@@ -80,6 +93,7 @@ def handler(event, context):
 
             if reason is not None:
                 if not isinstance(reason, str) or len(reason) > 255:
+                    logger.warning("Invalid blackout reason received")
                     return response(400, {
                         "message": "reason must be 255 characters or fewer"
                     })
@@ -88,12 +102,14 @@ def handler(event, context):
 
         # Validate supported methods
         if method not in ("GET", "POST", "PUT", "DELETE"):
+            logger.warning("Method not allowed: %s", method)
             return response(405, {
                 "message": "Method not allowed"
             })
 
         # Validate path parameters
         if method in ("PUT", "DELETE") and not blackout_id:
+            logger.warning("blackout_id is required for %s", method)
             return response(400, {
                 "message": "blackout_id is required"
             })
@@ -101,12 +117,16 @@ def handler(event, context):
         c = config()
         conn = dbconn(c)
 
+        logger.info("Database connection established")
+
         with conn.cursor() as cur:
 
             # --------------------------------
             # GET ALL BLACKOUT DATES
             # --------------------------------
             if method == "GET" and not blackout_id:
+
+                logger.info("Fetching all blackout dates for doctor_id=%s", doctor_id)
 
                 cur.execute(
                     """
@@ -120,6 +140,8 @@ def handler(event, context):
 
                 rows = cur.fetchall()
 
+                logger.info("Fetched %s blackout date(s)", len(rows))
+
                 for row in rows:
                     if row.get("blackout_date"):
                         row["blackout_date"] = (
@@ -131,6 +153,8 @@ def handler(event, context):
                             row["created_at"].isoformat()
                         )
 
+                logger.info("Blackout dates list returned successfully")
+
                 return response(200, {
                     "blackout_dates": rows
                 })
@@ -139,6 +163,8 @@ def handler(event, context):
             # GET BLACKOUT DATE BY ID
             # --------------------------------
             if method == "GET" and blackout_id:
+
+                logger.info("Fetching blackout_id=%s", blackout_id)
 
                 cur.execute(
                     """
@@ -153,6 +179,10 @@ def handler(event, context):
                 row = cur.fetchone()
 
                 if not row:
+                    logger.warning(
+                        "Blackout date not found: blackout_id=%s",
+                        blackout_id
+                    )
                     return response(404, {
                         "message": "Blackout date not found"
                     })
@@ -167,12 +197,16 @@ def handler(event, context):
                         row["created_at"].isoformat()
                     )
 
+                logger.info("Blackout date fetched successfully")
+
                 return response(200, row)
 
             # --------------------------------
             # POST CREATE BLACKOUT DATE
             # --------------------------------
             if method == "POST":
+
+                logger.info("Creating blackout date: %s", blackout_date)
 
                 cur.execute(
                     """
@@ -185,6 +219,11 @@ def handler(event, context):
 
                 conn.commit()
 
+                logger.info(
+                    "Blackout date created successfully: blackout_id=%s",
+                    cur.lastrowid
+                )
+
                 return response(201, {
                     "message": "Blackout date created successfully",
                     "blackout_id": cur.lastrowid,
@@ -196,6 +235,8 @@ def handler(event, context):
             # PUT UPDATE BLACKOUT DATE
             # --------------------------------
             if method == "PUT" and blackout_id:
+
+                logger.info("Updating blackout_id=%s", blackout_id)
 
                 # Check whether the blackout date exists
                 # and belongs to the authenticated doctor
@@ -212,6 +253,10 @@ def handler(event, context):
                 existing = cur.fetchone()
 
                 if not existing:
+                    logger.warning(
+                        "Blackout date not found for update: blackout_id=%s",
+                        blackout_id
+                    )
                     return response(404, {
                         "message": "Blackout date not found"
                     })
@@ -235,6 +280,11 @@ def handler(event, context):
 
                 conn.commit()
 
+                logger.info(
+                    "Blackout date updated successfully: blackout_id=%s",
+                    blackout_id
+                )
+
                 return response(200, {
                     "message": "Blackout date updated successfully",
                     "blackout_id": blackout_id,
@@ -247,6 +297,8 @@ def handler(event, context):
             # --------------------------------
             if method == "DELETE" and blackout_id:
 
+                logger.info("Deleting blackout_id=%s", blackout_id)
+
                 cur.execute(
                     """
                     DELETE FROM doctor_blackout_dates
@@ -257,11 +309,20 @@ def handler(event, context):
                 )
 
                 if cur.rowcount == 0:
+                    logger.warning(
+                        "Blackout date not found for deletion: blackout_id=%s",
+                        blackout_id
+                    )
                     return response(404, {
                         "message": "Blackout date not found"
                     })
 
                 conn.commit()
+
+                logger.info(
+                    "Blackout date deleted successfully: blackout_id=%s",
+                    blackout_id
+                )
 
                 return response(200, {
                     "message": "Blackout date deleted successfully",
@@ -281,3 +342,4 @@ def handler(event, context):
     finally:
         if conn:
             conn.close()
+            logger.info("Database connection closed")

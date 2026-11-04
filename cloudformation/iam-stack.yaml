@@ -84,6 +84,15 @@ Resources:
             Condition:
               StringEquals:
                 iam:PassedToService: lambda.amazonaws.com
+          - Sid: PassDashboardInstanceRoleToEC2
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - arn:aws:iam::195710498029:role/instanceRole
+            Condition:
+              StringEquals:
+                iam:PassedToService: ec2.amazonaws.com
           - Sid: ManageMediSlotLambdaFunctions
             Effect: Allow
             Action:
@@ -157,6 +166,12 @@ Resources:
               - ec2:CreateTags
               - ec2:DeleteTags
               - ec2:DescribeTags
+              - ec2:RunInstances
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceStatus
+              - ec2:DescribeImages
+              - ec2:DescribeKeyPairs
+              - ec2:DescribeIamInstanceProfileAssociations
             Resource: "*"
             Condition:
               StringEquals:
