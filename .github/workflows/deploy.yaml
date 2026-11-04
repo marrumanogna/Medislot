@@ -64,7 +64,7 @@ jobs:
         env:
           AWS_REGION: us-east-1
           AWS_DEFAULT_REGION: us-east-1
-        run: pytest -q
+        run: pytest -q --ignore=tests/integration
 
       - name: Python syntax check
         run: python -m compileall -q lambdas tests scripts
@@ -325,15 +325,17 @@ jobs:
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           BUCKET="medislot-${ENVIRONMENT}-artifacts-v2-${AWS_ACCOUNT_ID}"
 
-          for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule; do
+          for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule doctor_slot_management patient_profile doctor_discovery db_migrate; do
             tmp="$(mktemp -d)"
 
             cp -R "lambdas/${fn}/." "$tmp/"
             cp "lambdas/common.py" "$tmp/common.py"
 
-            pip install --quiet \
-              -r "lambdas/${fn}/requirements.txt" \
-              -t "$tmp"
+            if [[ -f "lambdas/${fn}/requirements.txt" ]]; then
+              pip install --quiet \
+                -r "lambdas/${fn}/requirements.txt" \
+                -t "$tmp"
+            fi
 
             (
               cd "$tmp"
@@ -375,6 +377,30 @@ jobs:
             --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
             --output table
 
+      # Schema changes (new column + search indexes) are applied by the
+      # db-migrate Lambda, which runs inside the VPC. It is idempotent and
+      # fails the pipeline on any error.
+      - name: Apply database migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          aws lambda invoke \
+            --function-name "medislot-${ENVIRONMENT}-db-migrate" \
+            --payload '{"correlationId":"github-actions-migrate"}' \
+            --cli-binary-format raw-in-base64-out \
+            --query FunctionError \
+            --output text \
+            /tmp/db-migrate.json \
+            --region "$AWS_REGION" | tee /tmp/db-migrate-error.txt
+
+          cat /tmp/db-migrate.json; echo
+
+          if [[ "$(cat /tmp/db-migrate-error.txt)" != "None" ]]; then
+            echo "::error::Database migration failed"
+            exit 1
+          fi
+
       - name: Test RDS connectivity
         shell: bash
         run: |
@@ -398,3 +424,20 @@ jobs:
               body = json.loads(body)
           assert body.get("connected") is True, result
           '
+
+      # Runs the real API: patient profile CRUD, data isolation, doctor search
+      # with every filter combination, public profile and slot availability.
+      - name: Integration tests against deployed API
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pip install -r requirements-dev.txt
+
+          export MEDISLOT_API_URL="$(aws cloudformation describe-stacks \
+            --stack-name "medislot-${ENVIRONMENT}-auth" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue | [0]" \
+            --output text)"
+
+          pytest tests/integration -q -rs

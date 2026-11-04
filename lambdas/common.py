@@ -1,4 +1,4 @@
-import json, os, uuid, logging, boto3, pymysql, hashlib, time
+import json, os, re, uuid, logging, boto3, pymysql, hashlib, time
 from functools import lru_cache
 from botocore.exceptions import ClientError
 
@@ -128,3 +128,66 @@ def correlation(event):
         or (event.get("requestContext") or {}).get("requestId")
         or str(uuid.uuid4())
     )
+
+
+###best-effort city extraction (doctor search city filter)------------
+# Indian states / UTs that are NOT also commonly used as a city name.
+# Delhi, Chandigarh and Puducherry are deliberately absent: people use them
+# as the city, so "Connaught Place, Delhi" should yield "Delhi".
+_NON_CITY_TAILS = {
+    "india", "bharat",
+    "andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh",
+    "goa", "gujarat", "haryana", "himachal pradesh", "jharkhand", "karnataka",
+    "kerala", "madhya pradesh", "maharashtra", "manipur", "meghalaya",
+    "mizoram", "nagaland", "odisha", "orissa", "punjab", "rajasthan",
+    "sikkim", "tamil nadu", "telangana", "tripura", "uttar pradesh",
+    "uttarakhand", "west bengal", "andaman and nicobar islands",
+    "dadra and nagar haveli and daman and diu", "jammu and kashmir",
+    "ladakh", "lakshadweep",
+    "ap", "ts", "tg", "tn", "ka", "kl", "mh", "up", "mp", "wb", "gj", "rj",
+    "hr", "pb", "br", "od",
+}
+# Words that mean the segment is a street fragment, not a city name.
+_STREET_WORDS = re.compile(
+    r"\b(road|rd|street|st|lane|near|opposite|opp|plot|floor|block|sector"
+    r"|building|hospital|clinic)\b",
+    re.IGNORECASE,
+)
+_PINCODE_TAIL = re.compile(r"[\s\-\u2013:,.]*\b\d{5,6}\b\s*$")
+
+
+def derive_city(address):
+    """Guess the city from a free-text address, or None when unsure.
+
+    Works on the usual Indian format "..., Area, City, State 500001":
+    trailing pincode / state / country segments are dropped and the last
+    remaining comma-separated segment is returned. This is a best-effort
+    backfill and default; doctors can always set hospital_city themselves.
+    """
+    if not isinstance(address, str):
+        return None
+
+    parts = [p.strip() for p in re.split(r"[,\n]", address) if p.strip()]
+    candidate = None
+
+    while parts:
+        segment = _PINCODE_TAIL.sub("", parts.pop()).strip(" .-\u2013")
+        # "Telangana 500034" -> "Telangana"; a bare pincode -> "".
+        if not segment or segment.lower() in _NON_CITY_TAILS:
+            continue
+        candidate = segment
+        break
+
+    if (
+        not candidate
+        or len(candidate) > 100
+        or re.search(r"\d", candidate)
+        or _STREET_WORDS.search(candidate)
+    ):
+        return None
+
+    # A lone long segment is a street address, not a city name.
+    if not parts and len(candidate) > 50:
+        return None
+
+    return candidate

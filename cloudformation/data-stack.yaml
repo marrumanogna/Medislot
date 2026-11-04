@@ -8,6 +8,11 @@ Parameters:
     Default: dev
     AllowedValues: [dev, test, prod]
 
+  BucketSuffix:
+    Type: String
+    Description: Unique suffix generated for each new stack deployment
+    Default: initial
+
 Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -199,27 +204,29 @@ Resources:
         SSEEnabled: true
 
   DoctorPhotosBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub 'medislot-${Environment}-doctor-photos-${AWS::AccountId}-${AWS::Region}'
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      VersioningConfiguration:
-        Status: Enabled
+  Type: AWS::S3::Bucket
+  DeletionPolicy: Retain
+  UpdateReplacePolicy: Retain
+  Properties:
+    BucketName: !Sub 'medislot-${Environment}-doctor-photos-${BucketSuffix}-${AWS::AccountId}-${AWS::Region}'
+    PublicAccessBlockConfiguration:
+      BlockPublicAcls: true
+      BlockPublicPolicy: true
+      IgnorePublicAcls: true
+      RestrictPublicBuckets: true
+    BucketEncryption:
+      ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+    VersioningConfiguration:
+      Status: Enabled
 
   ArtifactBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub 'medislot-${Environment}-artifacts-v3-${AWS::AccountId}'
+      BucketName: !Sub 'medislot-${Environment}-artifacts-${BucketSuffix}-${AWS::AccountId}'
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true

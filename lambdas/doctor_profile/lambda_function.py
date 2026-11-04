@@ -3,12 +3,10 @@ import json
 import uuid
 import logging
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
 import boto3
 from botocore.exceptions import ClientError
 
-from common import config, dbconn, body, response, emit, correlation
+from common import config, dbconn, body, response, emit, correlation, derive_city
 
 
 logger = logging.getLogger()
@@ -16,19 +14,19 @@ logger.setLevel(logging.INFO)
 
 s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
 
-MAX_PHOTO_BYTES = 5 * 1024 * 1024
+MAX_PHOTO_BYTES = 5 * 1024 * 1024  # 5mb
 PHOTO_TYPES = {
     "image/jpeg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
 }
 
-# These are the only fields this Lambda permits clients to write.
 STRING_LIMITS = {
     "licence_number": 100,
     "specialization": 120,
     "hospital_name": 200,
     "hospital_address": 500,
+    "hospital_city": 100,
     "bio": 5000,
 }
 
@@ -47,6 +45,7 @@ ALLOWED_FIELDS = REQUIRED_FIELDS | {
     "consultation_fee",
     "timezone",
     "photo_key",
+    "hospital_city",  # optional; derived from hospital_address if omitted
 }
 
 
@@ -117,10 +116,12 @@ def validate_string_array(field, value, cid):
 
 def validate_profile_data(data, method, cid):
     if not isinstance(data, dict):
+        logger.warning("Invalid profile JSON body")
         return None, error_response(400, "Invalid JSON body", cid)
 
     unsupported = set(data) - ALLOWED_FIELDS
     if unsupported:
+        logger.warning("Unsupported profile fields received")
         return None, error_response(
             400,
             "Request contains unsupported fields",
@@ -131,6 +132,7 @@ def validate_profile_data(data, method, cid):
     if method in ("POST", "PUT"):
         missing = REQUIRED_FIELDS - set(data)
         if missing:
+            logger.warning("Required profile fields are missing")
             return None, error_response(
                 400,
                 "Missing required profile fields",
@@ -139,6 +141,7 @@ def validate_profile_data(data, method, cid):
             )
 
     if method == "PATCH" and not data:
+        logger.warning("Empty PATCH request received")
         return None, error_response(
             400, "At least one profile field is required", cid
         )
@@ -157,6 +160,7 @@ def validate_profile_data(data, method, cid):
             required=(field in REQUIRED_FIELDS),
         )
         if error:
+            logger.warning("Profile field validation failed: %s", field)
             return None, error
         values[field] = cleaned
 
@@ -164,6 +168,7 @@ def validate_profile_data(data, method, cid):
         if field in data:
             cleaned, error = validate_string_array(field, data[field], cid)
             if error:
+                logger.warning("Profile array validation failed: %s", field)
                 return None, error
             # MySQL JSON columns accept a JSON-encoded string.
             values[field] = json.dumps(cleaned)
@@ -171,6 +176,7 @@ def validate_profile_data(data, method, cid):
     if "experience_years" in data:
         value = data["experience_years"]
         if type(value) is not int or not 0 <= value <= 80:
+            logger.warning("Invalid experience_years value")
             return None, error_response(
                 400, "experience_years must be an integer from 0 to 80", cid
             )
@@ -179,6 +185,7 @@ def validate_profile_data(data, method, cid):
     if "consultation_fee" in data:
         value = data["consultation_fee"]
         if isinstance(value, bool) or value is None:
+            logger.warning("Invalid consultation_fee value")
             return None, error_response(
                 400, "consultation_fee must be a non-negative amount", cid
             )
@@ -194,6 +201,7 @@ def validate_profile_data(data, method, cid):
                 raise InvalidOperation
             values["consultation_fee"] = fee
         except (InvalidOperation, ValueError, TypeError):
+            logger.warning("Consultation fee validation failed")
             return None, error_response(
                 400,
                 "consultation_fee must be non-negative with at most 2 decimals",
@@ -202,32 +210,35 @@ def validate_profile_data(data, method, cid):
 
     if "timezone" in data:
         value = data["timezone"]
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str) or value.strip() != "Asia/Kolkata":
+            logger.warning("Only Asia/Kolkata timezone is supported")
             return None, error_response(
-                400, "timezone must be an IANA timezone name", cid
+                400, "timezone must be Asia/Kolkata", cid
             )
-        value = value.strip()
-        try:
-            ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError):
-            return None, error_response(400, "Unknown timezone", cid)
-        values["timezone"] = value
+        values["timezone"] = "Asia/Kolkata"
 
     if "photo_key" in data:
         value = data["photo_key"]
         if value is not None and (
             not isinstance(value, str) or not value.strip()
         ):
+            logger.warning("Invalid photo_key value")
             return None, error_response(
                 400, "photo_key must be a valid key or null", cid
             )
         values["photo_key"] = value.strip() if isinstance(value, str) else None
 
+    # City used by patient search. Doctors may set it explicitly; otherwise it
+    # is derived from the (new) address, so older clients keep working.
+    if "hospital_city" not in values and "hospital_address" in values:
+        values["hospital_city"] = derive_city(values["hospital_address"])
+
     if method in ("POST", "PUT"):
         values.setdefault("bio", None)
         values.setdefault("consultation_fee", None)
-        values.setdefault("timezone", "UTC")
+        values.setdefault("timezone", "Asia/Kolkata")
 
+    logger.info("Doctor profile data validation successful")
     return values, None
 
 
@@ -243,34 +254,52 @@ def decode_json_columns(profile):
 
 
 def handler(event, context):
+    logger.info("Doctor Profile Lambda execution started")
+
     cid = correlation(event)
     method = (event.get("httpMethod") or "").upper()
     user_id = authenticated_user(event)
 
+    logger.info(
+        "Request received: method=%s, correlation_id=%s",
+        method, cid
+    )
+
     if user_id is None:
+        logger.warning("Unauthorized doctor profile request")
         return error_response(
             403, "A valid authenticated doctor account is required", cid
         )
 
+    logger.info("Doctor authenticated successfully: user_id=%s", user_id)
+
     path = (event.get("path") or event.get("resource") or "").rstrip("/")
     is_photo_upload_route = path.endswith("/doctor/profile/photo-upload-url")
 
+    if is_photo_upload_route:
+        logger.info("Doctor photo upload URL route requested")
+
     if method not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        logger.warning("Method not allowed: %s", method)
         return error_response(405, "Method not allowed", cid)
 
     if is_photo_upload_route and method != "POST":
+        logger.warning("Invalid method for photo upload URL route")
         return error_response(405, "Method not allowed", cid)
 
     data = {}
     if method in ("POST", "PUT", "PATCH"):
         data = body(event)
         if not isinstance(data, dict):
+            logger.warning("Invalid JSON request body")
             return error_response(400, "Invalid JSON body", cid)
 
     values = {}
     if method in ("POST", "PUT", "PATCH") and not is_photo_upload_route:
+        logger.info("Validating doctor profile data")
         values, validation_error = validate_profile_data(data, method, cid)
         if validation_error:
+            logger.warning("Doctor profile data validation failed")
             return validation_error
 
     conn = None
@@ -278,6 +307,8 @@ def handler(event, context):
     try:
         c = config()
         conn = dbconn(c)
+
+        logger.info("Database connection established")
 
         with conn.cursor() as cur:
             cur.execute(
@@ -296,16 +327,22 @@ def handler(event, context):
             doctor = cur.fetchone()
 
             if not doctor:
+                logger.warning("Active doctor account not found")
                 conn.rollback()
                 return error_response(404, "Active doctor account not found", cid)
 
+            logger.info("Active doctor account verified")
+
             if is_photo_upload_route:
+                logger.info("Processing doctor photo upload URL request")
+
                 content_type = data.get("content_type")
                 extension = PHOTO_TYPES.get(content_type)
                 content_length = data.get("content_length")
                 bucket = os.environ.get("DOCTOR_PHOTOS_BUCKET")
 
                 if not extension:
+                    logger.warning("Unsupported doctor photo content type")
                     conn.rollback()
                     return error_response(
                         400,
@@ -317,6 +354,7 @@ def handler(event, context):
                     type(content_length) is not int
                     or not 1 <= content_length <= MAX_PHOTO_BYTES
                 ):
+                    logger.warning("Invalid doctor photo content length")
                     conn.rollback()
                     return error_response(
                         400,
@@ -325,6 +363,7 @@ def handler(event, context):
                     )
 
                 if not bucket:
+                    logger.error("Doctor photo S3 bucket is not configured")
                     conn.rollback()
                     emit("error", "doctor_photo_bucket_not_configured", cid)
                     return error_response(
@@ -343,6 +382,8 @@ def handler(event, context):
                     HttpMethod="PUT",
                 )
 
+                logger.info("Doctor photo upload URL generated successfully")
+
                 conn.rollback()
                 return response(200, {
                     "upload_url": upload_url,
@@ -357,6 +398,8 @@ def handler(event, context):
                 })
 
             if method == "DELETE":
+                logger.info("Deleting doctor profile")
+
                 cur.execute(
                     "SELECT photo_key FROM doctor_profiles WHERE user_id = %s",
                     (user_id,),
@@ -364,6 +407,7 @@ def handler(event, context):
                 existing = cur.fetchone()
 
                 if not existing:
+                    logger.warning("Doctor profile not found for deletion")
                     conn.rollback()
                     return error_response(404, "Doctor profile not found", cid)
 
@@ -375,13 +419,17 @@ def handler(event, context):
                 )
                 conn.commit()
 
+                logger.info("Doctor profile deleted from database")
+
                 if photo_key and os.environ.get("DOCTOR_PHOTOS_BUCKET"):
                     try:
                         s3.delete_object(
                             Bucket=os.environ["DOCTOR_PHOTOS_BUCKET"],
                             Key=photo_key,
                         )
+                        logger.info("Doctor profile photo deleted from S3")
                     except Exception:
+                        logger.exception("Doctor profile photo cleanup failed")
                         emit(
                             "warning",
                             "doctor_profile_photo_cleanup_failed",
@@ -390,6 +438,8 @@ def handler(event, context):
                         )
 
                 emit("info", "doctor_profile_deleted", cid, userId=str(user_id))
+                logger.info("Doctor profile deletion completed successfully")
+
                 return response(200, {
                     "message": "Doctor profile deleted",
                     "userId": str(user_id),
@@ -399,11 +449,14 @@ def handler(event, context):
                 "photo_key" in values
                 and values["photo_key"] is not None
             ):
+                logger.info("Validating uploaded doctor profile photo")
+
                 photo_key = values["photo_key"]
                 expected_prefix = f"doctors/{user_id}/"
                 bucket = os.environ.get("DOCTOR_PHOTOS_BUCKET")
 
                 if not photo_key.startswith(expected_prefix) or not bucket:
+                    logger.warning("Photo key does not belong to doctor account")
                     conn.rollback()
                     return error_response(
                         400,
@@ -417,6 +470,7 @@ def handler(event, context):
                         Key=photo_key,
                     )
                 except ClientError:
+                    logger.warning("Uploaded doctor photo was not found in S3")
                     conn.rollback()
                     return error_response(
                         400,
@@ -428,6 +482,7 @@ def handler(event, context):
                     photo_head.get("ContentLength", 0) > MAX_PHOTO_BYTES
                     or photo_head.get("ContentType") not in PHOTO_TYPES
                 ):
+                    logger.warning("Uploaded doctor photo failed validation")
                     conn.rollback()
                     return error_response(
                         400,
@@ -435,7 +490,11 @@ def handler(event, context):
                         cid,
                     )
 
+                logger.info("Uploaded doctor photo validation successful")
+
             if method == "GET":
+                logger.info("Fetching doctor profile")
+
                 cur.execute(
                     """
                     SELECT
@@ -446,6 +505,7 @@ def handler(event, context):
                         experience_years,
                         hospital_name,
                         hospital_address,
+                        hospital_city,
                         languages_spoken,
                         bio,
                         consultation_fee,
@@ -461,10 +521,14 @@ def handler(event, context):
                 profile = cur.fetchone()
 
                 if not profile:
+                    logger.warning("Doctor profile not found")
                     conn.rollback()
                     return error_response(404, "Doctor profile not found", cid)
 
                 result = {**doctor, **decode_json_columns(profile)}
+                # The application uses IST for all doctor schedules.
+                result["timezone"] = "Asia/Kolkata"
+
                 # Generate a temporary URL to display the doctor's profile photo
                 photo_key = result.get("photo_key")
                 bucket = os.environ.get("DOCTOR_PHOTOS_BUCKET")
@@ -486,9 +550,9 @@ def handler(event, context):
                         ExpiresIn=300,
                     )
                     logger.info(
-                    "PHOTO URL DEBUG: key_valid=%s url_type=%s",
-                    bool(photo_key and photo_key.startswith(f"doctors/{user_id}/")),
-                    type(result["photo_url"]).__name__
+                        "PHOTO URL DEBUG: key_valid=%s url_type=%s",
+                        bool(photo_key and photo_key.startswith(f"doctors/{user_id}/")),
+                        type(result["photo_url"]).__name__
                     )
 
                 for key in ("created_at", "updated_at"):
@@ -500,8 +564,12 @@ def handler(event, context):
                         result["consultation_fee"]
                     )
 
+                logger.info("Doctor profile fetched successfully")
+
                 conn.rollback()
                 return response(200, result)
+
+            logger.info("Checking whether doctor profile already exists")
 
             cur.execute(
                 "SELECT user_id FROM doctor_profiles WHERE user_id = %s",
@@ -510,6 +578,7 @@ def handler(event, context):
             exists = cur.fetchone() is not None
 
             if method == "POST" and exists:
+                logger.warning("Doctor profile already exists")
                 conn.rollback()
                 return error_response(
                     409,
@@ -518,6 +587,7 @@ def handler(event, context):
                 )
 
             if method in ("PUT", "PATCH") and not exists:
+                logger.warning("Doctor profile does not exist for update")
                 conn.rollback()
                 return error_response(
                     404,
@@ -526,6 +596,8 @@ def handler(event, context):
                 )
 
             if method == "POST":
+                logger.info("Creating new doctor profile")
+
                 columns = ["user_id", "full_name", *values.keys()]
                 params = [user_id, doctor["full_name"], *values.values()]
                 placeholders = ", ".join(["%s"] * len(columns))
@@ -536,7 +608,10 @@ def handler(event, context):
                     params,
                 )
             else:
+                logger.info("Updating existing doctor profile")
+
                 if not values:
+                    logger.warning("No profile fields supplied for update")
                     conn.rollback()
                     return error_response(
                         400, "No profile fields supplied", cid
@@ -552,6 +627,8 @@ def handler(event, context):
                 )
 
         conn.commit()
+
+        logger.info("Doctor profile saved successfully")
 
         emit(
             "info",
@@ -581,6 +658,7 @@ def handler(event, context):
                 pass
 
         logger.exception("doctor_profile_failed")
+
         emit(
             "error",
             "doctor_profile_failed",
@@ -588,8 +666,10 @@ def handler(event, context):
             method=method,
             userId=str(user_id),
         )
+
         return error_response(500, "Internal server error", cid)
 
     finally:
         if conn is not None:
             conn.close()
+            logger.info("Database connection closed")
