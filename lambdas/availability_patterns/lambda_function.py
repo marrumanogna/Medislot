@@ -1,4 +1,5 @@
 import logging
+import time as time_module
 from datetime import time, timedelta
 
 from common import config, dbconn, response, body
@@ -30,10 +31,13 @@ def normalize_time(value):
 
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
-            return time.strptime(value, fmt) and (
-                value if fmt == "%H:%M:%S"
-                else f"{value}:00"
-            )
+            time_module.strptime(value, fmt)
+
+            if fmt == "%H:%M":
+                return f"{value}:00"
+
+            return value
+
         except ValueError:
             continue
 

@@ -1,6 +1,6 @@
-
 import importlib.util
 import os
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,13 +12,16 @@ os.environ.setdefault("AWS_EC2_METADATA_DISABLED", "true")
 
 
 def load_lambda(name):
+    sys.path.insert(0, str(ROOT / "lambdas"))
+
     path = ROOT / "lambdas" / name / "lambda_function.py"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+
     with patch("boto3.client"), patch("boto3.resource"):
         spec.loader.exec_module(module)
-    return module
 
+    return module
 
 @pytest.fixture
 def api():

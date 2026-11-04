@@ -54,6 +54,12 @@ def test_materialises_slots_and_skips_blackout():
 
     cursor.fetchall.side_effect = [
         [pattern],
+        [{
+            "doctor_id": 12,
+            "consultation_type_id": 5,
+            "name": "Video consultation",
+            "duration_minutes": 30,
+        }],
         [{"doctor_id": 12, "blackout_date": today}],
     ]
 
@@ -114,7 +120,21 @@ def test_duplicate_insert_is_ignored():
         "duration_minutes": 30,
     }
 
-    cursor.fetchall.side_effect = [[pattern], []]
+    cursor.fetchall.side_effect = [
+        [pattern],
+        [{
+            "doctor_id": 12,
+            "consultation_type_id": 5,
+            "name": "Video consultation",
+            "duration_minutes": 30,
+        }],
+        [],
+    ]
+
+    cursor.fetchone.side_effect = [
+        {"lock_status": 1},
+        None,
+    ]
 
     # Simulate MySQL reporting that INSERT IGNORE skipped a duplicate.
     cursor.rowcount = 0

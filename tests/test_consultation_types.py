@@ -1,6 +1,6 @@
-
 import importlib.util
 import os
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,13 +11,16 @@ os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("AWS_EC2_METADATA_DISABLED", "true")
 
 def load_lambda(name):
+    sys.path.insert(0, str(ROOT / "lambdas"))
+
     path = ROOT / "lambdas" / name / "lambda_function.py"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+
     with patch("boto3.client"), patch("boto3.resource"):
         spec.loader.exec_module(module)
-    return module
 
+    return module
 @pytest.fixture
 def api():
     module = load_lambda("consultation_types")
@@ -54,9 +57,9 @@ def test_list_types(api):
     assert result["statusCode"] == 200
     cursor.execute.assert_called_once()
 
-def test_create_type(api):
-    module, conn, cursor = api
-    cursor.lastrowid = 7
+def test_post_not_allowed(api):
+    module, conn, _ = api
+
     result = module.handler(
         event("POST", {
             "name": "Video consultation",
@@ -65,11 +68,17 @@ def test_create_type(api):
         }),
         None,
     )
-    assert result["statusCode"] == 201
-    conn.commit.assert_called_once()
 
-def test_create_type_requires_name(api):
+    assert result["statusCode"] == 405
+    conn.commit.assert_not_called()
+
+def test_post_not_allowed_even_with_empty_name(api):
     module, conn, _ = api
-    result = module.handler(event("POST", {"name": ""}), None)
-    assert result["statusCode"] == 400
+
+    result = module.handler(
+        event("POST", {"name": ""}),
+        None,
+    )
+
+    assert result["statusCode"] == 405
     conn.commit.assert_not_called()
