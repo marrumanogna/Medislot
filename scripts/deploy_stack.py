@@ -179,5 +179,38 @@ if data["Status"] != "CREATE_COMPLETE":
     raise SystemExit("Change Set failed; see reason above.")
 aws("cloudformation", "execute-change-set", "--stack-name", stack_name, "--change-set-name", name)
 waiter = "stack-create-complete" if kind == "CREATE" else "stack-update-complete"
-aws("cloudformation", "wait", waiter, "--stack-name", stack_name)
+try:
+    aws("cloudformation", "wait", waiter, "--stack-name", stack_name)
+except subprocess.CalledProcessError:
+    print(f"\nERROR: Stack {stack_name} did not complete.")
+
+    events = aws(
+        "cloudformation",
+        "describe-stack-events",
+        "--stack-name", stack_name,
+        "--output", "json",
+        check=False
+    )
+
+    if events.returncode == 0:
+        event_data = json.loads(events.stdout)
+
+        print("\nRecent failed CloudFormation resources:")
+        for event in event_data.get("StackEvents", []):
+            status = event.get("ResourceStatus", "")
+            if status in (
+                "CREATE_FAILED",
+                "UPDATE_FAILED",
+                "DELETE_FAILED",
+                "ROLLBACK_FAILED"
+            ):
+                print(
+                    f"Resource: {event.get('LogicalResourceId')}\n"
+                    f"Status: {status}\n"
+                    f"Reason: {event.get('ResourceStatusReason')}\n"
+                    "-----------------------------"
+                )
+
+    raise
+
 print(f"Stack {stack_name} deployed successfully.")
