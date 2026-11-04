@@ -204,22 +204,22 @@ Resources:
         SSEEnabled: true
 
   DoctorPhotosBucket:
-  Type: AWS::S3::Bucket
-  DeletionPolicy: Retain
-  UpdateReplacePolicy: Retain
-  Properties:
-    BucketName: !Sub 'medislot-${Environment}-doctor-photos-${BucketSuffix}-${AWS::AccountId}-${AWS::Region}'
-    PublicAccessBlockConfiguration:
-      BlockPublicAcls: true
-      BlockPublicPolicy: true
-      IgnorePublicAcls: true
-      RestrictPublicBuckets: true
-    BucketEncryption:
-      ServerSideEncryptionConfiguration:
-        - ServerSideEncryptionByDefault:
-            SSEAlgorithm: AES256
-    VersioningConfiguration:
-      Status: Enabled
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'medislot-${Environment}-doctor-photos-${BucketSuffix}-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
 
   ArtifactBucket:
     Type: AWS::S3::Bucket
