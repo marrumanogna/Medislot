@@ -1,7 +1,7 @@
 
 import logging
 from collections import defaultdict
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from common import config, dbconn, response
@@ -221,9 +221,11 @@ def handler(event, context):
             for row in blackout_rows:
                 blackout_date = row["blackout_date"]
 
-                # Convert datetime to date for consistent comparison.
+                # Normalize MySQL DATE/DATETIME/string values to date.
                 if isinstance(blackout_date, datetime):
                     blackout_date = blackout_date.date()
+                elif isinstance(blackout_date, str):
+                    blackout_date = date.fromisoformat(blackout_date[:10])
 
                 blackouts.add((
                     int(row["doctor_id"]),
@@ -276,10 +278,23 @@ def handler(event, context):
                         current_date += timedelta(days=1)
                         continue
 
-                    # Skip blackout dates.
-                    if (doctor_id, current_date) in blackouts:
-                        skipped_blackout += 1
+                    # Skip blackout dates. Normalize the date before lookup
+                    # so MySQL DATE, DATETIME, and ISO date values compare alike.
+                    check_date = current_date
+                    if isinstance(check_date, datetime):
+                        check_date = check_date.date()
+                    elif isinstance(check_date, str):
+                        check_date = date.fromisoformat(check_date[:10])
 
+                    blackout_key = (int(doctor_id), check_date)
+
+                    if blackout_key in blackouts:
+                        skipped_blackout += 1
+                        logger.info(
+                            "Blackout date skipped: doctor=%s, date=%s",
+                            doctor_id,
+                            check_date
+                        )
                         current_date += timedelta(days=1)
                         continue
 
