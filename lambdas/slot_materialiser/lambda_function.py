@@ -68,25 +68,6 @@ def localize_slot(local_dt, tz):
 
     return min(candidates).replace(tzinfo=None)
 
-def localize_slot(local_dt, tz):
-    """Convert local datetime to UTC, handling DST transitions."""
-
-    candidates = []
-
-    for fold in (0, 1):
-        aware = local_dt.replace(tzinfo=tz, fold=fold)
-        utc_dt = aware.astimezone(timezone.utc)
-        round_trip = utc_dt.astimezone(tz)
-
-        if round_trip.replace(tzinfo=None) == local_dt:
-            if utc_dt not in candidates:
-                candidates.append(utc_dt)
-
-    if not candidates:
-        return None
-
-    return min(candidates).replace(tzinfo=None)
-
 def intervals_overlap(start1, end1, start2, end2):
     """Return True when two time intervals overlap."""
 
@@ -235,16 +216,24 @@ def handler(event, context):
 
             blackout_rows = cur.fetchall()
 
-            blackouts = {
-                (int(row["doctor_id"]), row["blackout_date"])
-                for row in blackout_rows
-            }
+            blackouts = set()
+
+            for row in blackout_rows:
+                blackout_date = row["blackout_date"]
+
+                # Convert datetime to date for consistent comparison.
+                if isinstance(blackout_date, datetime):
+                    blackout_date = blackout_date.date()
+
+                blackouts.add((
+                    int(row["doctor_id"]),
+                    blackout_date
+                ))
 
             logger.info(
                 "Blackout dates fetched: %s",
                 len(blackouts)
             )
-
             # -------------------------------------------------
             # 4. Group availability by doctor and weekday
             # -------------------------------------------------
