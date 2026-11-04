@@ -177,7 +177,7 @@ def handler(event, context):
 
     try:
         conn = dbconn(config())
-                if event.get("diagnostic"):
+        if event.get("diagnostic"):
             with conn.cursor() as cur:
                 cur.execute("SELECT DATABASE() AS database_name")
                 database = cur.fetchone()
