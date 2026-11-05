@@ -105,7 +105,10 @@ def test_handler_applies_pending_and_records_it():
     module.dbconn = lambda c: conn
     module.config = lambda: {}
     result = module.handler({}, None)
-    assert result["applied"] == ["m4_001_doctor_search"]
+    assert result["applied"] == [
+    "m4_001_doctor_search",
+    "m4_002_users_first_last_name",
+    ]
     assert all(result["doctor_search_indexes"].values())
     assert conn.cur.sql_containing("INSERT INTO schema_migrations")
     assert conn.cur.sql_containing("RELEASE_LOCK") and conn.closed

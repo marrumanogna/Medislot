@@ -202,8 +202,44 @@ def migrate_m4_doctor_search(cur):
     return changes
 
 
+def migrate_m4_002_users_first_last_name(cur):
+    """Add separate first and last name columns to users."""
+
+    changes = {"columns_added": []}
+
+    if ensure_column(cur, "users", "first_name", "VARCHAR(100) NULL"):
+        changes["columns_added"].append("first_name")
+
+    if ensure_column(cur, "users", "last_name", "VARCHAR(100) NULL"):
+        changes["columns_added"].append("last_name")
+
+    cur.execute(
+        """
+        SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_TYPE
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'users'
+          AND COLUMN_NAME = 'full_name'
+        """
+    )
+
+    full_name_column = cur.fetchone() or {}
+
+    if full_name_column.get("IS_NULLABLE") == "NO":
+        cur.execute(
+            """
+            ALTER TABLE users
+            MODIFY COLUMN full_name VARCHAR(150) NULL
+            """
+        )
+        changes["full_name_made_nullable"] = True
+
+    return changes
+
+
 MIGRATIONS = (
     ("m4_001_doctor_search", migrate_m4_doctor_search),
+    ("m4_002_users_first_last_name", migrate_m4_002_users_first_last_name),
 )
 
 

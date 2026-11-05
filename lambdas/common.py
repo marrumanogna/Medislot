@@ -62,7 +62,7 @@ def config():
 
 
 def dbconn(c):
-    conn = pymysql.connect(
+    return pymysql.connect(
         host=c["dbhost"],
         port=c["dbport"],
         user=c["dbuser"],
@@ -74,25 +74,6 @@ def dbconn(c):
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=False
     )
-
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                email VARCHAR(254) NOT NULL UNIQUE,
-                password_hash VARCHAR(255) NOT NULL,
-                role ENUM('PATIENT','DOCTOR') NOT NULL,
-                full_name VARCHAR(150) NOT NULL,
-                is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                    ON UPDATE CURRENT_TIMESTAMP(6)
-            ) ENGINE=InnoDB
-        """)
-
-    conn.commit()
-    return conn
-
 
 def table(name):
     return ddb.Table(name)

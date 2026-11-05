@@ -396,7 +396,7 @@ jobs:
 
           aws lambda invoke \
             --function-name "medislot-${ENVIRONMENT}-db-migrate" \
-            --payload '{"correlationId":"github-actions-migrate","initialize_base_schema":true}' \
+            --payload '{"correlationId":"github-actions-migrate"}' \
             --cli-binary-format raw-in-base64-out \
             --query FunctionError \
             --output text \
