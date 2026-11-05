@@ -28,6 +28,7 @@ to inspect the live database.
 
 import logging
 import re
+from pathlib import Path
 
 from common import config, dbconn, derive_city, emit
 
@@ -311,6 +312,164 @@ def get_database_diagnostic(cur):
 
 
 # --------------------------------------------------------------------------- #
+# One-time base-schema recovery
+# --------------------------------------------------------------------------- #
+
+EXPECTED_INITIAL_TABLES = {"users", "schema_migrations"}
+EXPECTED_FINAL_TABLES = {
+    "users",
+    "doctor_profiles",
+    "patients",
+    "consultation_catalogue",
+    "doctor_consultation_fees",
+    "availability_patterns",
+    "doctor_blackout_dates",
+    "appointment_slots",
+    "specialization_options",
+    "experience_options",
+    "qualification_options",
+    "language_options",
+    "schema_migrations",
+}
+LEGACY_USERS_TABLE = "users_legacy_backup"
+
+def _schema_statements(sql_text):
+    """Split this repository's simple SQL install script into statements."""
+    # The checked-in schema uses no stored procedures or semicolons inside
+    # string literals. Remove full-line MySQL comments and split on ';'.
+    sql_text = re.sub(r"(?m)^\s*--.*$", "", sql_text)
+    statements = []
+    for statement in sql_text.split(";"):
+        statement = statement.strip()
+        if not statement:
+            continue
+        if re.match(r"(?is)^CREATE\s+DATABASE\b", statement):
+            continue
+        if re.match(r"(?is)^USE\s+", statement):
+            continue
+        statements.append(statement)
+    return statements
+
+def initialize_base_schema(cur, conn, schema_path=None):
+    """Safely bootstrap the known-empty dev schema after explicit approval.
+
+    Only accepts the verified starting state (users + schema_migrations, no
+    rows, no foreign keys involving users). The old users table is renamed,
+    never dropped. DDL is idempotent, so a partially completed run can be
+    retried after inspecting the resulting table set.
+    """
+    cur.execute("SELECT DATABASE() AS database_name")
+    database = cur.fetchone()["database_name"]
+    if database != "medislot":
+        raise RuntimeError(
+            f"Refusing base-schema initialization in unexpected database: {database!r}"
+        )
+
+    cur.execute(
+        """
+        SELECT TABLE_NAME
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+        ORDER BY TABLE_NAME
+        """
+    )
+    tables = {row["TABLE_NAME"] for row in cur.fetchall()}
+
+    # First run: require exactly the known incomplete schema. A retry after a
+    # previous interrupted run is allowed only when the legacy backup exists.
+    first_run = tables == EXPECTED_INITIAL_TABLES
+    retry_run = (
+        LEGACY_USERS_TABLE in tables
+        and "schema_migrations" in tables
+        and tables.issubset(EXPECTED_FINAL_TABLES | {LEGACY_USERS_TABLE})
+    )
+    if not first_run and not retry_run:
+        raise RuntimeError(
+            "Refusing schema initialization: unexpected database tables "
+            f"{sorted(tables)}. Expected {sorted(EXPECTED_INITIAL_TABLES)} "
+            "or a recognizable interrupted initialization."
+        )
+
+    if "users" in tables:
+        cur.execute("SELECT COUNT(*) AS users_count FROM users")
+        users_count = cur.fetchone()["users_count"]
+        if users_count != 0:
+            raise RuntimeError(
+                f"Refusing schema initialization: users table contains {users_count} rows"
+            )
+
+    cur.execute("SELECT COUNT(*) AS migration_count FROM schema_migrations")
+    migration_count = cur.fetchone()["migration_count"]
+    if migration_count != 0:
+        raise RuntimeError(
+            "Refusing schema initialization: schema_migrations is not empty"
+        )
+
+    if "users" in tables:
+        cur.execute(
+            """
+            SELECT CONSTRAINT_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND (TABLE_NAME = 'users' OR REFERENCED_TABLE_NAME = 'users')
+              AND REFERENCED_TABLE_NAME IS NOT NULL
+            LIMIT 1
+            """
+        )
+        if cur.fetchone() is not None:
+            raise RuntimeError(
+                "Refusing schema initialization: foreign-key dependencies involve users"
+            )
+
+    if first_run:
+        cur.execute(
+            f"RENAME TABLE users TO {_ident(LEGACY_USERS_TABLE)}"
+        )
+        conn.commit()
+
+    path = Path(schema_path) if schema_path else (
+        Path(__file__).resolve().parent / "scehma" / "schema.sql"
+    )
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Packaged base schema not found: {path}. Ensure deploy workflow copies scehma/schema.sql."
+        )
+
+    sql_text = path.read_text(encoding="utf-8")
+    statements = _schema_statements(sql_text)
+    if not statements:
+        raise RuntimeError("Base schema file contains no executable SQL statements")
+
+    for statement in statements:
+        cur.execute(statement)
+
+    conn.commit()
+
+    cur.execute(
+        """
+        SELECT TABLE_NAME
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+        ORDER BY TABLE_NAME
+        """
+    )
+    final_tables = {row["TABLE_NAME"] for row in cur.fetchall()}
+    missing = EXPECTED_FINAL_TABLES - final_tables
+    if missing:
+        raise RuntimeError(
+            f"Base schema initialization incomplete; missing tables: {sorted(missing)}"
+        )
+
+    return {
+        "status": "base_schema_initialized",
+        "database": database,
+        "legacy_users_table": LEGACY_USERS_TABLE,
+        "tables_created_or_verified": sorted(EXPECTED_FINAL_TABLES),
+        "schema_statements_executed": len(statements),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Migration runner
 # --------------------------------------------------------------------------- #
 
@@ -322,6 +481,7 @@ def handler(event, context):
 
     conn = None
     locked = False
+    initialization = None
 
     try:
         conn = dbconn(config())
@@ -348,6 +508,12 @@ def handler(event, context):
                 raise RuntimeError(
                     "Another migration is already running"
                 )
+
+            # Explicit one-time recovery only. Ordinary CI migration events
+            # never rename tables or initialize the base schema.
+            if event.get("initialize_base_schema") is True:
+                initialization = initialize_base_schema(cur, conn)
+                logger.info("Base schema initialization result: %s", initialization)
 
             # Ensure migration tracking table exists.
             cur.execute(
@@ -379,6 +545,9 @@ def handler(event, context):
 
             result = {
                 "status": "ok",
+                "base_schema_initialization": (
+                    initialization if event.get("initialize_base_schema") is True else None
+                ),
                 "dry_run": dry_run,
                 "already_applied": sorted(done),
                 "applied": [],
