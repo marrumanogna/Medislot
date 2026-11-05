@@ -337,13 +337,17 @@ jobs:
               cp "scehma/schema.sql" "$tmp/scehma/schema.sql"
             fi
 
-            # Required by PyMySQL for MySQL caching_sha2_password authentication
-            pip install --quiet cryptography -t "$tmp"
+            # Install shared database dependencies used by Lambda functions
+            pip install --quiet \
+            PyMySQL==1.1.1 \
+            cryptography \
+            -t "$tmp"
 
+            # Install any additional Lambda-specific dependencies
             if [[ -f "lambdas/${fn}/requirements.txt" ]]; then
-              pip install --quiet \
-                -r "lambdas/${fn}/requirements.txt" \
-                -t "$tmp"
+            pip install --quiet \
+            -r "lambdas/${fn}/requirements.txt" \
+            -t "$tmp"
             fi
 
             (
