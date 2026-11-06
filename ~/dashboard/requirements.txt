@@ -1,6 +1,0 @@
-Flask
-requests
-python-dotenv
-gunicorn
-Flask-Session
-cachelib

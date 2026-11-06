@@ -1,92 +1,146 @@
-
 AWSTemplateFormatVersion: "2010-09-09"
-
-Description: MediSlot Flask Dashboard EC2 deployment.
+Description: MediSlot Flask dashboard on a public EC2. Browser -> EC2 (port 80) -> API Gateway (HTTPS, server-side requests).
 
 Parameters:
   Environment:
     Type: String
     Default: dev
-
-  PublicSubnetId:
-    Type: AWS::EC2::Subnet::Id
-    Default: subnet-0305c2728b827421c
-
-  DashboardSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Default: sg-0dcbc850f2c978482
-
-  InstanceProfileName:
-    Type: String
-    Default: instanceRole
-
-  KeyName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Default: workbench
-
-  LatestAmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-
   ApiBaseUrl:
     Type: String
-    Description: Existing MediSlot API Gateway base URL.
-
+    Description: API Gateway invoke URL including stage, no trailing slash
   FlaskSecret:
     Type: String
     NoEcho: true
     MinLength: 32
-    Description: Long random Flask session secret.
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  KeyName:
+    Type: String
+    Default: ""
+    Description: Optional EC2 key pair (leave empty to use SSM Session Manager instead of SSH)
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Conditions:
+  HasKey: !Not [!Equals [!Ref KeyName, ""]]
 
 Resources:
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub medislot-${Environment}-dashboard-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  DashboardSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Dashboard web access (HTTP in; all out so Flask can call API Gateway on 443)
+      VpcId: !ImportValue
+        Fn::Sub: MediSlot-${Environment}-VPCId
+      SecurityGroupIngress:
+        - {Description: HTTP, IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
+      Tags:
+        - {Key: Name, Value: !Sub "medislot-${Environment}-dashboard-sg"}
+
+  DashboardRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-dashboard-bundle
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${DashboardBucket.Arn}/*"
+
+  DashboardInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref DashboardRole]
+
   DashboardInstance:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref LatestAmiId
-      InstanceType: t3.micro
-      KeyName: !Ref KeyName
-      IamInstanceProfile: !Ref InstanceProfileName
+      InstanceType: !Ref InstanceType
+      KeyName: !If [HasKey, !Ref KeyName, !Ref "AWS::NoValue"]
+      IamInstanceProfile: !Ref DashboardInstanceProfile
       NetworkInterfaces:
-        - DeviceIndex: 0
+        - DeviceIndex: "0"
           AssociatePublicIpAddress: true
-          SubnetId: !Ref PublicSubnetId
-          GroupSet:
-            - !Ref DashboardSecurityGroupId
+          SubnetId: !ImportValue
+            Fn::Sub: MediSlot-${Environment}-PublicSubnetId
+          GroupSet: [!Ref DashboardSecurityGroup]
       Tags:
-        - Key: Name
-          Value: !Sub medislot-${Environment}-dashboard
-        - Key: Project
-          Value: MediSlot
-
+        - {Key: Name, Value: !Sub "medislot-${Environment}-dashboard"}
+        - {Key: Project, Value: MediSlot}
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -eux
+          dnf install -y python3-pip
+          mkdir -p /opt/medislot/flask_session
 
-          dnf update -y
-          dnf install -y python3 python3-pip git
-
-          mkdir -p /opt/medislot-dashboard
-          chown ec2-user:ec2-user /opt/medislot-dashboard
-
-          cat > /opt/medislot-dashboard/.env <<'ENVVARS'
+          cat > /opt/medislot/.env <<'ENVVARS'
           API_BASE_URL=${ApiBaseUrl}
           FLASK_SECRET_KEY=${FlaskSecret}
           SESSION_COOKIE_SECURE=0
           ENVVARS
+          chmod 600 /opt/medislot/.env
 
-          chmod 600 /opt/medislot-dashboard/.env
-          chown ec2-user:ec2-user /opt/medislot-dashboard/.env
+          cat > /opt/medislot/deploy.sh <<'DEPLOY'
+          #!/bin/bash
+          set -eux
+          aws s3 cp s3://${DashboardBucket}/dashboard.tgz /tmp/dashboard.tgz
+          tar -xzf /tmp/dashboard.tgz -C /opt/medislot
+          [ -d /opt/medislot/venv ] || python3 -m venv /opt/medislot/venv
+          /opt/medislot/venv/bin/pip install -r /opt/medislot/requirements.txt
+          chown -R ec2-user:ec2-user /opt/medislot
+          systemctl restart medislot
+          DEPLOY
+          chmod +x /opt/medislot/deploy.sh
+
+          cat > /etc/systemd/system/medislot.service <<'UNIT'
+          [Unit]
+          Description=MediSlot dashboard
+          After=network-online.target
+          [Service]
+          User=ec2-user
+          WorkingDirectory=/opt/medislot
+          EnvironmentFile=/opt/medislot/.env
+          ExecStart=/opt/medislot/venv/bin/gunicorn -w 2 -b 0.0.0.0:80 app:app
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable medislot
+
+          # Wait (up to ~10 min) for you to upload dashboard.tgz to the bucket
+          for i in $(seq 1 60); do
+            /opt/medislot/deploy.sh && break || sleep 10
+          done
 
 Outputs:
-  DashboardInstanceId:
-    Description: Dashboard EC2 instance ID.
-    Value: !Ref DashboardInstance
-
-  DashboardPublicIp:
-    Description: Dashboard public IP.
-    Value: !GetAtt DashboardInstance.PublicIp
-
   DashboardUrl:
-    Description: Dashboard HTTP URL.
-    Value: !Sub http://${DashboardInstance.PublicDnsName}
+    Value: !Sub "http://${DashboardInstance.PublicIp}"
+  DashboardInstanceId:
+    Value: !Ref DashboardInstance
+  BucketName:
+    Value: !Ref DashboardBucket
