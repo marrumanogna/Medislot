@@ -1,4 +1,3 @@
-
 name: MediSlot Milestone 2 CI and Deployment
 
 on:
@@ -332,6 +331,9 @@ jobs:
 
             cp -R "lambdas/${fn}/." "$tmp/"
             cp "lambdas/common.py" "$tmp/common.py"
+            if [[ "$fn" == "doctor_slot_management" ]]; then
+              cp "lambdas/slot_materialiser/lambda_function.py" "$tmp/slot_materialiser_impl.py"
+            fi
             if [[ "$fn" == "db_migrate" ]]; then
               mkdir -p "$tmp/scehma"
               cp "scehma/schema.sql" "$tmp/scehma/schema.sql"

@@ -421,8 +421,13 @@
       const slots = r.data.slots || [];
       const booked = slots.filter((s) => s.status === "BOOKED").length;
       $("#day-sub").textContent += ` · ${slots.length} slot${slots.length === 1 ? "" : "s"}, ${booked} booked`;
-      $("#day-body").innerHTML = slots.length ? `<div class="timeline">${slotRows(slots)}</div>`
-        : emptyState(ICON_CAL, "No slots on this day", "This could be a day off, a blackout date, or a day outside the 30-day booking window.");
+      const drafts = slots.filter((s) => s.status === "DRAFT").length;
+      const pubDay = $("#pub-day");
+      pubDay.classList.toggle("hidden", !drafts);
+      pubDay.textContent = `Publish ${drafts} draft slot${drafts === 1 ? "" : "s"}`;
+      $("#day-body").innerHTML = (drafts ? '<p style="margin:0 0 12px">These slots are drafts. Publish them so patients can book.</p>' : "")
+        + (slots.length ? `<div class="timeline">${slotRows(slots)}</div>`
+          : emptyState(ICON_CAL, "No slots on this day", "Click Generate slots to create slots from your weekly hours. Days off and blackout dates have none."));
     }
     const go = (d) => { day = d; history.replaceState(null, "", "?date=" + d); load(); };
     $("#prev-day").onclick = () => go(addDays(day, -1));
@@ -430,6 +435,27 @@
     $("#go-today").onclick = () => go(today);
     $("#day-pick").onchange = (e) => e.target.value && go(e.target.value);
     $("#weekstrip").onclick = (e) => { const b = e.target.closest("button[data-d]"); if (b) go(b.dataset.d); };
+    $("#gen-slots").onclick = (e) => withBusy(e.currentTarget, async () => {
+      const r = await api("POST", "doctor/slots", { action: "generate", days_ahead: 14 });
+      if (!r.ok) { toast(errorMessage(r, "Could not generate slots."), "error"); return; }
+      const n = r.data.slots_created || 0;
+      if (n) toast(`Created ${n} draft slot${n === 1 ? "" : "s"}. Review and publish them.`);
+      else if (r.data.doctors_without_selected_types) toast("Tick at least one consultation type first (Consultation types page).", "error");
+      else toast("No new slots. Add weekly hours on the Availability page, or slots already exist.");
+      load();
+    });
+    $("#pub-day").onclick = (e) => withBusy(e.currentTarget, async () => {
+      const r = await api("POST", "doctor/slots", { action: "publish", date: day });
+      if (r.ok) toast(`Published ${r.data.slots_published || 0} slot(s).`); else toast(errorMessage(r, "Could not publish."), "error");
+      load();
+    });
+    $("#pub-all").onclick = (e) => withBusy(e.currentTarget, async () => {
+      const dates = Array.from({ length: 15 }, (_, i) => addDays(today, i));
+      const rs = await Promise.all(dates.map((d) => api("POST", "doctor/slots", { action: "publish", date: d })));
+      const n = rs.reduce((a, r) => a + (r.ok ? (r.data.slots_published || 0) : 0), 0);
+      toast(n ? `Published ${n} slot${n === 1 ? "" : "s"}.` : "No draft slots to publish.");
+      load();
+    });
     load();
   };
 
