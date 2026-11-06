@@ -2,21 +2,17 @@
 {% from "partials/icons.html" import icon %}
 {% block content %}
 <section class="card">
-  <div class="card-head"><div><h2>Consultation types</h2><p>Each type has its own duration and fee.</p></div><button class="btn btn-primary btn-sm" id="add-type" type="button">Add consultation type</button></div>
-  <div id="types-body"><div class="skel-block"><div class="skeleton"></div><div class="skeleton" style="width:75%"></div></div></div>
-</section>
-<dialog id="type-dlg"><form method="dialog" id="type-form" novalidate>
-  <div class="dlg-head"><h2 id="type-title">Add consultation type</h2><p>Patients choose from your active types when booking.</p></div>
-  <div class="dlg-body">
-    <div class="presets" id="presets" aria-label="Quick fill"><button type="button" class="btn btn-ghost btn-sm" data-n="Quick Consult" data-d="15">Quick · 15 min</button><button type="button" class="btn btn-ghost btn-sm" data-n="Standard Consult" data-d="30">Standard · 30 min</button><button type="button" class="btn btn-ghost btn-sm" data-n="Detailed Consult" data-d="60">Detailed · 60 min</button></div>
-    <div class="field"><label for="t-name">Name</label><input class="input" id="t-name" required maxlength="100"></div>
-    <div class="form-grid">
-      <div class="field"><label for="t-dur">Duration (minutes)</label><input class="input" id="t-dur" type="number" min="5" max="480" step="5" value="30" required></div>
-      <div class="field"><label for="t-fee">Fee</label><input class="input" id="t-fee" type="number" min="0" step="0.01" value="0" required></div>
+  <div class="card-head">
+    <div>
+      <h2>Consultation types</h2>
+      <p>Choose the consultations you offer and set your fee for each.</p>
     </div>
-    <div class="field"><label for="t-desc">Description (optional)</label><textarea class="input" id="t-desc" style="min-height:70px"></textarea></div>
-    <div class="alert alert-error hidden" id="type-err" role="alert"></div>
   </div>
-  <div class="dlg-foot"><button class="btn btn-ghost" type="button" id="type-cancel">Cancel</button><button class="btn btn-primary" type="submit" data-busy="Saving…">Save</button></div>
-</form></dialog>
+  <div id="types-body">
+    <div class="skel-block">
+      <div class="skeleton"></div>
+      <div class="skeleton" style="width:75%"></div>
+    </div>
+  </div>
+</section>
 {% endblock %}

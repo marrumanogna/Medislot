@@ -141,7 +141,8 @@ INSERT INTO consultation_catalogue
 VALUES
     (1, 'Quick Consult', 15, 1),
     (2, 'Standard Consult', 30, 1),
-    (3, 'Detailed Consult', 60, 1)
+    (3, 'Detailed Consult', 60, 1),
+    (4, 'Health Camp Session', 60, 1)
 ON DUPLICATE KEY UPDATE
     name = VALUES(name),
     duration_minutes = VALUES(duration_minutes),

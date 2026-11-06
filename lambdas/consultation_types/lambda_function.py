@@ -1,4 +1,3 @@
-
 import logging
 from decimal import Decimal, InvalidOperation
 
@@ -84,13 +83,20 @@ def handler(event, context):
             if not isinstance(data, dict):
                 return response(400, {"message": "Invalid JSON body"})
 
-            # Doctors can only modify fees.
-            allowed_fields = {"fee"}
+            # Doctors choose which catalogue types they offer and set a fee.
+            allowed_fields = {"fee", "is_active"}
 
-            if set(data.keys()) != allowed_fields:
+            if "fee" not in data or not set(data.keys()) <= allowed_fields:
                 return response(
                     400,
-                    {"message": "Only the fee field can be updated"}
+                    {"message": "Send fee, and optionally is_active"}
+                )
+
+            is_active = data.get("is_active", True)
+            if not isinstance(is_active, bool):
+                return response(
+                    400,
+                    {"message": "is_active must be true or false"}
                 )
 
             try:
@@ -141,7 +147,7 @@ def handler(event, context):
                             SELECT
                                 ct.consultation_type_id,
                                 ct.name,
-                                ct.description,
+                                NULL AS description,
                                 ct.duration_minutes,
                                 ct.is_active,
                                 CAST(dcf.fee AS CHAR) AS fee,
@@ -178,7 +184,7 @@ def handler(event, context):
                         SELECT
                             ct.consultation_type_id,
                             ct.name,
-                            ct.description,
+                            NULL AS description,
                             ct.duration_minutes,
                             ct.is_active,
                             CAST(dcf.fee AS CHAR) AS fee,
@@ -249,13 +255,14 @@ def handler(event, context):
                     cur.execute(
                         """
                         INSERT INTO doctor_consultation_fees
-                            (doctor_id, consultation_type_id, fee)
-                        VALUES (%s, %s, %s)
+                            (doctor_id, consultation_type_id, fee, is_active)
+                        VALUES (%s, %s, %s, %s)
 
                         ON DUPLICATE KEY UPDATE
-                            fee = VALUES(fee)
+                            fee = VALUES(fee),
+                            is_active = VALUES(is_active)
                         """,
-                        (doctor_id, type_id, fee)
+                        (doctor_id, type_id, fee, 1 if is_active else 0)
                     )
 
                     conn.commit()
@@ -273,7 +280,8 @@ def handler(event, context):
                             "message": "Consultation fee updated successfully",
                             "doctor_id": doctor_id,
                             "consultation_type_id": type_id,
-                            "fee": str(fee)
+                            "fee": str(fee),
+                            "is_active": is_active
                         }
                     )
 

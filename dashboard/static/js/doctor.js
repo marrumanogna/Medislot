@@ -227,136 +227,55 @@
     });
   };
 
-  /* ---------- Consultation fees ---------- */
+  /* ---------- Consultation types (fixed catalogue: choose what you offer + set a fee) ---------- */
   pages.consultations = async () => {
     const body = $("#types-body");
     let items = [];
-
-    function validFee(value) {
-      return /^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$/.test(
-        String(value).trim()
-      );
-    }
+    const validFee = (v) => /^(?:0|[1-9]\d{0,7})(?:\.\d{1,2})?$/.test(String(v).trim());
 
     async function load() {
-      body.innerHTML = `
-        <div class="skel-block">
-          <div class="skeleton"></div>
-          <div class="skeleton" style="width:75%"></div>
-        </div>
-      `;
-
+      body.innerHTML = `<div class="skel-block"><div class="skeleton"></div><div class="skeleton" style="width:75%"></div></div>`;
       const r = await api("GET", EP.types);
-
-      if (!r.ok) {
-        body.innerHTML = failBox(r, true);
-        return;
-      }
-
+      if (!r.ok) { body.innerHTML = failBox(r, true); return; }
       items = r.data.items || [];
-
       if (!items.length) {
-        body.innerHTML = emptyState(
-          ICON_CLOCK,
-          "No consultation types available",
-          "Please contact support if the consultation catalogue is unavailable."
-        );
+        body.innerHTML = emptyState(ICON_CLOCK, "No consultation types available", "The consultation catalogue is empty. Please contact support.");
         return;
       }
-
-      body.innerHTML = `
-        <div class="consultation-fee-grid">
-          ${items.map((t) => {
-            const id = t.consultation_type_id;
-            const fee = t.fee ?? "";
-
-            return `
-              <div class="consultation-fee-card">
-                <div class="consultation-fee-card-head">
-                  <div>
-                    <h3>${esc(t.name)}</h3>
-                    <p>${esc(t.duration_minutes)} minutes</p>
-                  </div>
-                </div>
-
-                <div class="field">
-                  <label for="fee-${esc(id)}">
-                    Your consultation fee (₹)
-                  </label>
-
-                  <input
-                    class="input fee-input"
-                    id="fee-${esc(id)}"
-                    type="number"
-                    min="0"
-                    max="99999999.99"
-                    step="0.01"
-                    placeholder="Enter fee"
-                    value="${esc(fee)}"
-                  >
-
-                  <div
-                    class="err hidden"
-                    id="fee-error-${esc(id)}"
-                    role="alert">
-                  </div>
-                </div>
-
-                <button
-                  class="btn btn-primary btn-sm"
-                  type="button"
-                  data-save-fee="${esc(id)}">
-                  Save Fee
-                </button>
-              </div>
-            `;
-          }).join("")}
-        </div>
-      `;
+      body.innerHTML = `<div class="consultation-fee-grid">${items.map((t) => {
+        const id = esc(t.consultation_type_id);
+        const on = Number(t.doctor_is_active) === 1;
+        const fee = t.fee ?? "";
+        return `<div class="consultation-fee-card">
+          <div class="consultation-fee-card-head"><div><h3>${esc(t.name)}</h3><p>${esc(t.duration_minutes)} minutes</p></div></div>
+          <label class="check"><input type="checkbox" id="on-${id}" ${on ? "checked" : ""}> <span>I offer this consultation</span></label>
+          <div class="field">
+            <label for="fee-${id}">Your fee (₹)</label>
+            <input class="input fee-input" id="fee-${id}" type="number" min="0" max="99999999.99" step="0.01" placeholder="Enter fee" value="${esc(fee)}">
+            <div class="err hidden" id="fee-error-${id}" role="alert"></div>
+          </div>
+          <button class="btn btn-primary btn-sm" type="button" data-save-fee="${id}">Save</button>
+        </div>`;
+      }).join("")}</div>`;
     }
 
     body.addEventListener("click", async (e) => {
       const button = e.target.closest("[data-save-fee]");
       if (!button) return;
-
       const id = button.dataset.saveFee;
       const input = $(`#fee-${CSS.escape(id)}`, body);
       const error = $(`#fee-error-${CSS.escape(id)}`, body);
-      const fee = input.value.trim();
-
-      error.classList.add("hidden");
-      error.textContent = "";
-
-      if (!fee) {
-        error.textContent = "Please enter a consultation fee.";
-      } else if (!validFee(fee)) {
-        error.textContent =
-          "Enter a non-negative fee with up to 2 decimal places.";
-      }
-
-      if (error.textContent) {
-        error.classList.remove("hidden");
-        input.focus();
-        return;
-      }
-
+      const offered = $(`#on-${CSS.escape(id)}`, body).checked;
+      let fee = input.value.trim();
+      error.classList.add("hidden"); error.textContent = "";
+      if (offered && !fee) error.textContent = "Enter your fee to offer this consultation.";
+      else if (fee && !validFee(fee)) error.textContent = "Enter a non-negative fee with up to 2 decimal places.";
+      if (error.textContent) { error.classList.remove("hidden"); input.focus(); return; }
+      if (!fee) fee = "0";
       await withBusy(button, async () => {
-        const r = await api(
-          "PATCH",
-          `${EP.types}/${encodeURIComponent(id)}`,
-          { fee: fee }
-        );
-
-        if (r.ok) {
-          toast("Consultation fee updated.");
-          await load();
-        } else {
-          error.textContent = errorMessage(
-            r,
-            "Could not update consultation fee."
-          );
-          error.classList.remove("hidden");
-        }
+        const r = await api("PATCH", `${EP.types}/${encodeURIComponent(id)}`, { fee, is_active: offered });
+        if (r.ok) { toast(offered ? "Saved. Patients can book this consultation." : "Saved. This consultation is hidden from patients."); await load(); }
+        else { error.textContent = errorMessage(r, "Could not save this consultation."); error.classList.remove("hidden"); }
       });
     });
 
