@@ -1,9 +1,11 @@
-import json
+﻿
 import logging
-from datetime import date, datetime, time, timedelta, timezone
+from collections import defaultdict
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from common import config, dbconn, response
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -12,489 +14,634 @@ IST = ZoneInfo("Asia/Kolkata")
 UTC = timezone.utc
 
 
-class APIError(Exception):
-    def __init__(self, status_code, message):
-        self.status_code = status_code
-        self.message = message
-        super().__init__(message)
+def as_time(value):
+    """Convert MySQL TIME values to Python time objects."""
 
+    if isinstance(value, timedelta):
+        seconds = int(value.total_seconds())
 
-def parse_body(event):
-    raw = event.get("body")
-    if not raw:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    try:
-        return json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        raise APIError(400, "Request body must contain valid JSON")
+        return time(
+            (seconds // 3600) % 24,
+            (seconds % 3600) // 60,
+            seconds % 60
+        )
 
-
-def get_doctor_id(event):
-    auth = event.get("requestContext", {}).get("authorizer", {})
-    role = auth.get("role") or auth.get("userRole") or auth.get("user_role")
-    doctor_id = (
-        auth.get("userId") or auth.get("user_id")
-        or auth.get("doctor_id") or auth.get("principalId")
-    )
-    if str(role or "").upper() != "DOCTOR":
-        raise APIError(403, "Only authenticated doctors can manage slots")
-    try:
-        return int(doctor_id)
-    except (TypeError, ValueError):
-        raise APIError(401, "Doctor identity is missing from authorizer context")
-
-
-def parse_date(value):
-    try:
-        return date.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        raise APIError(400, "date must use YYYY-MM-DD format")
-
-
-def parse_time(value):
-    try:
-        result = time.fromisoformat(str(value))
-        if result.tzinfo is not None:
-            raise ValueError
-        return result
-    except (TypeError, ValueError):
-        raise APIError(400, "time must use HH:MM or HH:MM:SS format")
+    return value
 
 
 def ist_to_utc(local_dt):
+    """Convert IST datetime to UTC-naive for MySQL storage."""
+
     return (
-        local_dt.replace(tzinfo=IST).astimezone(UTC).replace(tzinfo=None)
+        local_dt
+        .replace(tzinfo=IST)
+        .astimezone(UTC)
+        .replace(tzinfo=None)
     )
 
 
-def date_range_utc(day):
-    start = ist_to_utc(datetime.combine(day, time.min))
-    end = ist_to_utc(datetime.combine(day + timedelta(days=1), time.min))
-    return start, end
+def utc_to_ist(utc_dt):
+    """Convert UTC-naive MySQL datetime to IST."""
 
-
-def lock_schedule(cur, doctor_id, day):
-    name = f"ms_slot_{doctor_id}_{day.strftime('%Y%m%d')}"
-    cur.execute("SELECT GET_LOCK(%s, 10) AS lock_status", (name,))
-    row = cur.fetchone()
-    if not row or row.get("lock_status") != 1:
-        raise APIError(409, "Schedule is being updated. Please try again.")
-    return name
-
-
-def unlock_schedule(cur, name):
-    if name:
-        cur.execute("SELECT RELEASE_LOCK(%s)", (name,))
-
-
-def get_type(cur, doctor_id, type_id):
-    cur.execute(
-        """
-        SELECT ct.consultation_type_id, ct.name, ct.duration_minutes, dcf.fee
-        FROM consultation_catalogue ct
-        JOIN doctor_consultation_fees dcf
-          ON dcf.consultation_type_id = ct.consultation_type_id
-        WHERE ct.consultation_type_id = %s
-          AND ct.is_active = TRUE
-          AND dcf.doctor_id = %s
-          AND dcf.is_active = TRUE
-        LIMIT 1
-        """,
-        (type_id, doctor_id)
+    return (
+        utc_dt
+        .replace(tzinfo=UTC)
+        .astimezone(IST)
+        .replace(tzinfo=None)
     )
-    row = cur.fetchone()
-    if not row:
-        raise APIError(400, "Consultation type is inactive or has no active fee")
-    duration = int(row["duration_minutes"])
-    if not 5 <= duration <= 480:
-        raise APIError(400, "Consultation duration is invalid")
-    return row
-
-
-def get_slot(cur, doctor_id, slot_id):
-    cur.execute(
-        """
-        SELECT slot_id, doctor_id, consultation_type_id,
-               slot_start, slot_end, display_order, status
-        FROM appointment_slots
-        WHERE slot_id = %s AND doctor_id = %s
-        FOR UPDATE
-        """,
-        (slot_id, doctor_id)
-    )
-    row = cur.fetchone()
-    if not row:
-        raise APIError(404, "Slot not found")
-    if row["status"] != "DRAFT":
-        raise APIError(409, "Only DRAFT slots can be edited")
-    return row
-
-
-def ensure_no_overlap(cur, doctor_id, start_utc, end_utc, exclude_id=None):
-    sql = """
-        SELECT slot_id
-        FROM appointment_slots
-        WHERE doctor_id = %s
-          AND slot_start < %s
-          AND slot_end > %s
+def localize_slot(local_dt, tz):
     """
-    params = [doctor_id, end_utc, start_utc]
-    if exclude_id is not None:
-        sql += " AND slot_id <> %s"
-        params.append(exclude_id)
-    sql += " LIMIT 1 FOR UPDATE"
-    cur.execute(sql, tuple(params))
-    if cur.fetchone():
-        raise APIError(409, "This time overlaps another slot for the doctor")
+    Convert a local datetime to UTC-naive.
 
+    Skip nonexistent DST times and use the first occurrence
+    for ambiguous DST times.
+    """
+    valid_utc_times = []
 
-def create_draft(cur, doctor_id, payload):
-    day = parse_date(payload.get("date"))
-    start_time = parse_time(payload.get("start_time"))
-    try:
-        type_id = int(payload.get("consultation_type_id"))
-    except (TypeError, ValueError):
-        raise APIError(400, "consultation_type_id is required")
+    for fold in (0, 1):
+        aware_local = local_dt.replace(tzinfo=tz, fold=fold)
+        utc_dt = aware_local.astimezone(UTC)
 
-    selected = get_type(cur, doctor_id, type_id)
-    local_start = datetime.combine(day, start_time)
-    if local_start <= datetime.now(IST).replace(tzinfo=None):
-        raise APIError(400, "A new slot must start in the future")
-    local_end = local_start + timedelta(minutes=int(selected["duration_minutes"]))
-    start_utc, end_utc = ist_to_utc(local_start), ist_to_utc(local_end)
+        round_trip = utc_dt.astimezone(tz).replace(tzinfo=None)
 
-    lock_name = lock_schedule(cur, doctor_id, day)
-    try:
-        ensure_no_overlap(cur, doctor_id, start_utc, end_utc)
-        day_start, day_end = date_range_utc(day)
-        cur.execute(
-            """
-            SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order
-            FROM appointment_slots
-            WHERE doctor_id = %s AND slot_start >= %s AND slot_start < %s
-            """,
-            (doctor_id, day_start, day_end)
-        )
-        next_order = int(cur.fetchone()["next_order"])
-        cur.execute(
-            """
-            INSERT INTO appointment_slots
-              (doctor_id, consultation_type_id, slot_start, slot_end,
-               display_order, status)
-            VALUES (%s, %s, %s, %s, %s, 'DRAFT')
-            """,
-            (doctor_id, type_id, start_utc, end_utc, next_order)
-        )
-        return {
-            "slot_id": cur.lastrowid,
-            "consultation_type_id": type_id,
-            "consultation_type": selected["name"],
-            "fee": str(selected["fee"]),
-            "slot_start": local_start.isoformat(),
-            "slot_end": local_end.isoformat(),
-            "display_order": next_order,
-            "status": "DRAFT"
-        }
-    finally:
-        unlock_schedule(cur, lock_name)
+        if round_trip == local_dt:
+            utc_naive = utc_dt.replace(tzinfo=None)
 
+            if utc_naive not in valid_utc_times:
+                valid_utc_times.append(utc_naive)
 
-def update_slot(cur, doctor_id, slot_id, payload):
-    slot = get_slot(cur, doctor_id, slot_id)
-    action = str(payload.get("action", "")).lower()
-    old_day = slot["slot_start"].replace(tzinfo=UTC).astimezone(IST).date()
-    lock_name = lock_schedule(cur, doctor_id, old_day)
+    if not valid_utc_times:
+        return None
 
-    try:
-        if action == "assign":
-            try:
-                type_id = int(payload.get("consultation_type_id"))
-            except (TypeError, ValueError):
-                raise APIError(400, "consultation_type_id is required")
-            selected = get_type(cur, doctor_id, type_id)
-            local_start = slot["slot_start"].replace(tzinfo=UTC).astimezone(IST).replace(tzinfo=None)
-            local_end = local_start + timedelta(minutes=int(selected["duration_minutes"]))
-            start_utc, end_utc = ist_to_utc(local_start), ist_to_utc(local_end)
-            ensure_no_overlap(cur, doctor_id, start_utc, end_utc, slot_id)
-            cur.execute(
-                """
-                UPDATE appointment_slots
-                SET consultation_type_id = %s, slot_end = %s
-                WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
-                """,
-                (type_id, end_utc, slot_id, doctor_id)
-            )
-            return {
-                "message": "Consultation type assigned",
-                "slot_id": slot_id,
-                "consultation_type": selected["name"],
-                "slot_start": local_start.isoformat(),
-                "slot_end": local_end.isoformat()
-            }
+    return min(valid_utc_times)
 
-        if action == "reschedule":
-            if slot["consultation_type_id"] is None:
-                raise APIError(400, "Assign a consultation type before rescheduling")
-            selected = get_type(cur, doctor_id, int(slot["consultation_type_id"]))
-            day = parse_date(payload.get("date"))
-            start_time = parse_time(payload.get("start_time"))
-            local_start = datetime.combine(day, start_time)
-            if local_start <= datetime.now(IST).replace(tzinfo=None):
-                raise APIError(400, "A slot cannot be rescheduled into the past")
-            local_end = local_start + timedelta(minutes=int(selected["duration_minutes"]))
-            start_utc, end_utc = ist_to_utc(local_start), ist_to_utc(local_end)
+def intervals_overlap(start1, end1, start2, end2):
+    """Return True when two time intervals overlap."""
 
-            new_lock = None
-            if day != old_day:
-                new_lock = lock_schedule(cur, doctor_id, day)
-            try:
-                ensure_no_overlap(cur, doctor_id, start_utc, end_utc, slot_id)
-                cur.execute(
-                    """
-                    UPDATE appointment_slots
-                    SET slot_start = %s, slot_end = %s
-                    WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
-                    """,
-                    (start_utc, end_utc, slot_id, doctor_id)
-                )
-            finally:
-                if new_lock:
-                    unlock_schedule(cur, new_lock)
-            return {
-                "message": "Slot rescheduled",
-                "slot_id": slot_id,
-                "slot_start": local_start.isoformat(),
-                "slot_end": local_end.isoformat()
-            }
-
-        if action == "reorder":
-            try:
-                order = int(payload.get("display_order"))
-            except (TypeError, ValueError):
-                raise APIError(400, "display_order must be an integer")
-            if order < 1:
-                raise APIError(400, "display_order must be at least 1")
-            cur.execute(
-                """
-                UPDATE appointment_slots
-                SET display_order = %s
-                WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
-                """,
-                (order, slot_id, doctor_id)
-            )
-            return {"message": "Display order updated", "slot_id": slot_id, "display_order": order}
-
-        if action == "delete":
-            cur.execute(
-                """
-                DELETE FROM appointment_slots
-                WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
-                """,
-                (slot_id, doctor_id)
-            )
-            return {"message": "Draft slot deleted", "slot_id": slot_id}
-
-        raise APIError(400, "action must be assign, reschedule, reorder, or delete")
-    finally:
-        unlock_schedule(cur, lock_name)
-
-
-def reorder_schedule(cur, doctor_id, payload):
-    day = parse_date(payload.get("date"))
-    slot_ids = payload.get("slot_ids")
-    if not isinstance(slot_ids, list) or not slot_ids:
-        raise APIError(400, "slot_ids must be a non-empty ordered array")
-    try:
-        slot_ids = [int(value) for value in slot_ids]
-    except (TypeError, ValueError):
-        raise APIError(400, "Every slot_id must be an integer")
-    if len(slot_ids) != len(set(slot_ids)):
-        raise APIError(400, "slot_ids contains duplicate IDs")
-
-    lock_name = lock_schedule(cur, doctor_id, day)
-    try:
-        day_start, day_end = date_range_utc(day)
-        cur.execute(
-            """
-            SELECT slot_id
-            FROM appointment_slots
-            WHERE doctor_id = %s AND slot_start >= %s AND slot_start < %s
-              AND status = 'DRAFT'
-            FOR UPDATE
-            """,
-            (doctor_id, day_start, day_end)
-        )
-        existing = {int(row["slot_id"]) for row in cur.fetchall()}
-        if set(slot_ids) != existing:
-            raise APIError(400, "Provide every DRAFT slot ID for this date exactly once")
-
-        for slot_id in slot_ids:
-            cur.execute(
-                """
-                UPDATE appointment_slots SET display_order = %s
-                WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
-                """,
-                (-slot_id, slot_id, doctor_id)
-            )
-        for order, slot_id in enumerate(slot_ids, start=1):
-            cur.execute(
-                """
-                UPDATE appointment_slots SET display_order = %s
-                WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
-                """,
-                (order, slot_id, doctor_id)
-            )
-        return {"message": "Draft slots reordered", "date": day.isoformat(), "slot_ids": slot_ids}
-    finally:
-        unlock_schedule(cur, lock_name)
-
-
-def publish_schedule(cur, doctor_id, payload):
-    day = parse_date(payload.get("date"))
-    lock_name = lock_schedule(cur, doctor_id, day)
-    try:
-        day_start, day_end = date_range_utc(day)
-        cur.execute(
-            """
-            SELECT slot_id, consultation_type_id, slot_start, slot_end
-            FROM appointment_slots
-            WHERE doctor_id = %s AND slot_start >= %s AND slot_start < %s
-              AND status = 'DRAFT'
-            ORDER BY slot_start
-            FOR UPDATE
-            """,
-            (doctor_id, day_start, day_end)
-        )
-        slots = cur.fetchall()
-        if not slots:
-            raise APIError(400, "There are no DRAFT slots to publish")
-
-        previous_end = None
-        for slot in slots:
-            if slot["consultation_type_id"] is None:
-                raise APIError(400, f"Slot {slot['slot_id']} has no consultation type")
-            selected = get_type(cur, doctor_id, int(slot["consultation_type_id"]))
-            expected_end = slot["slot_start"] + timedelta(minutes=int(selected["duration_minutes"]))
-            if slot["slot_end"] != expected_end:
-                raise APIError(400, f"Slot {slot['slot_id']} duration does not match its consultation type")
-            if previous_end is not None and slot["slot_start"] < previous_end:
-                raise APIError(409, "Draft schedule contains overlapping slots")
-            previous_end = slot["slot_end"]
-
-        cur.execute(
-            """
-            UPDATE appointment_slots SET status = 'AVAILABLE'
-            WHERE doctor_id = %s AND slot_start >= %s AND slot_start < %s
-              AND status = 'DRAFT'
-            """,
-            (doctor_id, day_start, day_end)
-        )
-        return {
-            "message": "Schedule published successfully",
-            "date": day.isoformat(),
-            "slots_published": cur.rowcount,
-            "status": "AVAILABLE"
-        }
-    finally:
-        unlock_schedule(cur, lock_name)
+    return start1 < end2 and end1 > start2
 
 
 def handler(event, context):
+
+    logger.info("Slot Materialisation Lambda started")
+
+    logger.info(
+        "Request ID: %s",
+        getattr(context, "aws_request_id", "unknown")
+    )
+
     conn = None
+
     try:
         event = event or {}
-        auth = event.get("requestContext", {}).get("authorizer", {})
-        role = auth.get("role") or auth.get("userRole") or auth.get("user_role")
-        doctor_id = auth.get("userId") or auth.get("user_id") or auth.get("doctor_id") or auth.get("principalId")
-        if str(role or "").upper() != "DOCTOR":
-            raise APIError(403, "Only authenticated doctors can manage slots")
-        try:
-            doctor_id = int(doctor_id)
-        except (TypeError, ValueError):
-            raise APIError(401, "Doctor identity is missing from authorizer context")
+        days_ahead = int(event.get("days_ahead", 30))
 
-        raw_body = event.get("body")
-        if not raw_body:
-            payload = {}
-        elif isinstance(raw_body, dict):
-            payload = raw_body
-        else:
-            try:
-                payload = json.loads(raw_body)
-            except (TypeError, json.JSONDecodeError):
-                raise APIError(400, "Request body must contain valid JSON")
+        if not 1 <= days_ahead <= 90:
+            return response(400, {
+                "message": "days_ahead must be between 1 and 90"
+            })
 
-        method = (
-            event.get("httpMethod")
-            or event.get("requestContext", {}).get("http", {}).get("method")
-            or ""
-        ).upper()
-        slot_id = (event.get("pathParameters") or {}).get("slot_id")
+        now_ist = datetime.now(IST)
+        today = now_ist.date()
+        end_date = today + timedelta(days=days_ahead)
+        current_ist = now_ist.replace(tzinfo=None)
 
-        if method == "POST" and str(payload.get("action", "create")).lower() == "generate":
-            # Generate DRAFT slots for this doctor only (same logic as the nightly job).
-            import slot_materialiser_impl
-            try:
-                days = max(1, min(int(payload.get("days_ahead", 14)), 30))
-            except (TypeError, ValueError):
-                raise APIError(400, "days_ahead must be a number")
-            out = slot_materialiser_impl.handler(
-                {"days_ahead": days, "doctor_id": doctor_id}, context
-            )
-            return response(out.get("statusCode", 200), json.loads(out.get("body") or "{}"))
+        logger.info(
+            "Generating draft slots from %s to %s",
+            today,
+            end_date
+        )
 
         conn = dbconn(config())
+
+        created = 0
+        skipped_blackout = 0
+        skipped_no_types = 0
+        skipped_existing_schedule = 0
+        skipped_invalid_hours = 0
+        skipped_invalid_duration = 0
+        skipped_overlap = 0
+        skipped_lock = 0
+
         with conn.cursor() as cur:
-            if method == "POST":
-                action = str(payload.get("action", "create")).lower()
-                if action == "publish":
-                    result = publish_schedule(cur, doctor_id, payload)
-                    status_code = 200
-                elif action == "create":
-                    result = create_draft(cur, doctor_id, payload)
-                    status_code = 201
-                else:
-                    raise APIError(400, "POST action must be create or publish")
 
-            elif method == "PUT":
-                result = reorder_schedule(cur, doctor_id, payload)
-                status_code = 200
+            # -------------------------------------------------
+            # 1. Fetch active doctor availability patterns
+            # -------------------------------------------------
 
-            elif method == "PATCH":
-                if not slot_id:
-                    raise APIError(400, "slot_id is required in the URL")
-                try:
-                    slot_id = int(slot_id)
-                except (TypeError, ValueError):
-                    raise APIError(400, "slot_id must be an integer")
-                result = update_slot(cur, doctor_id, slot_id, payload)
-                status_code = 200
+            cur.execute(
+                """
+                SELECT
+                    doctor_id,
+                    day_of_week,
+                    start_time,
+                    end_time
+                FROM availability_patterns
+                WHERE is_active = TRUE
+                ORDER BY doctor_id, day_of_week, start_time
+                """
+            )
 
-            else:
-                raise APIError(405, "Method not allowed")
+            patterns = cur.fetchall()
+
+            logger.info(
+                "Active availability patterns: %s",
+                len(patterns)
+            )
+
+            # -------------------------------------------------
+            # 2. Fetch consultation types selected by doctors
+            #
+            # is_active = TRUE in doctor_consultation_fees
+            # means the doctor has selected that type.
+            # -------------------------------------------------
+
+            cur.execute(
+                """
+                SELECT
+                    ct.consultation_type_id,
+                    ct.name,
+                    ct.duration_minutes,
+                    dcf.doctor_id
+                FROM consultation_catalogue ct
+                INNER JOIN doctor_consultation_fees dcf
+                    ON ct.consultation_type_id =
+                       dcf.consultation_type_id
+                WHERE ct.is_active = TRUE
+                  AND dcf.is_active = TRUE
+                ORDER BY
+                    dcf.doctor_id,
+                    ct.consultation_type_id
+                """
+            )
+
+            consultation_rows = cur.fetchall()
+
+            doctor_types = defaultdict(list)
+
+            for row in consultation_rows:
+
+                duration = int(row["duration_minutes"])
+
+                if not 5 <= duration <= 480:
+                    skipped_invalid_duration += 1
+
+                    logger.warning(
+                        "Invalid duration: doctor=%s, type=%s",
+                        row["doctor_id"],
+                        row["consultation_type_id"]
+                    )
+                    continue
+
+                doctor_id = int(row["doctor_id"])
+
+                doctor_types[doctor_id].append({
+                    "consultation_type_id": int(
+                        row["consultation_type_id"]
+                    ),
+                    "name": row["name"],
+                    "duration": duration
+                })
+
+            logger.info(
+                "Active doctor consultation selections: %s",
+                len(consultation_rows)
+            )
+
+            # -------------------------------------------------
+            # 3. Fetch blackout dates
+            # -------------------------------------------------
+
+            cur.execute(
+                """
+                SELECT doctor_id, blackout_date
+                FROM doctor_blackout_dates
+                WHERE blackout_date BETWEEN %s AND %s
+                """,
+                (today, end_date)
+            )
+
+            blackout_rows = cur.fetchall()
+
+            blackouts = {
+                (int(row["doctor_id"]), row["blackout_date"])
+                for row in blackout_rows
+            }
+
+            logger.info(
+                "Blackout dates fetched: %s",
+                len(blackouts)
+            )
+
+            # -------------------------------------------------
+            # 4. Group availability by doctor and weekday
+            # -------------------------------------------------
+
+            doctor_patterns = defaultdict(list)
+
+            for pattern in patterns:
+
+                key = (
+                    int(pattern["doctor_id"]),
+                    int(pattern["day_of_week"])
+                )
+
+                doctor_patterns[key].append(pattern)
+
+            # -------------------------------------------------
+            # 5. Generate draft slots
+            # -------------------------------------------------
+
+            for (doctor_id, weekday), day_patterns in (
+                doctor_patterns.items()
+            ):
+
+                selected_types = doctor_types.get(doctor_id, [])
+
+                if not selected_types:
+                    skipped_no_types += 1
+
+                    logger.info(
+                        "Doctor %s has no active consultation types",
+                        doctor_id
+                    )
+                    continue
+
+                current_date = today
+
+                while current_date <= end_date:
+
+                    if current_date.weekday() != weekday:
+                        current_date += timedelta(days=1)
+                        continue
+
+                    # Skip blackout dates.
+                    if (doctor_id, current_date) in blackouts:
+                        skipped_blackout += 1
+
+                        current_date += timedelta(days=1)
+                        continue
+
+                    # -------------------------------------------------
+                    # 6. Acquire a doctor/date generation lock.
+                    # This serializes concurrent materialiser runs.
+                    # -------------------------------------------------
+
+                    lock_name = (
+                        f"ms_{doctor_id}_{current_date.strftime('%Y%m%d')}"
+                    )
+
+                    cur.execute(
+                        "SELECT GET_LOCK(%s, 10) AS lock_status",
+                        (lock_name,)
+                    )
+
+                    lock_result = cur.fetchone()
+
+                    if not lock_result or lock_result["lock_status"] != 1:
+                        skipped_lock += 1
+
+                        logger.warning(
+                            "Could not acquire generation lock: %s",
+                            lock_name
+                        )
+
+                        current_date += timedelta(days=1)
+                        continue
+
+                    try:
+
+                        day_start_utc = ist_to_utc(
+                            datetime.combine(current_date, time.min)
+                        )
+
+                        day_end_utc = ist_to_utc(
+                            datetime.combine(
+                                current_date + timedelta(days=1),
+                                time.min
+                            )
+                        )
+
+                        # -------------------------------------------------
+                        # 7. Preserve existing schedules.
+                        #
+                        # If any slot already exists for this doctor/date,
+                        # do not generate more slots for that date.
+                        # This protects manually edited draft slots and
+                        # already published/booked slots.
+                        # -------------------------------------------------
+
+                        cur.execute(
+                            """
+                            SELECT slot_id
+                            FROM appointment_slots
+                            WHERE doctor_id = %s
+                              AND slot_start < %s
+                              AND slot_end > %s
+                            LIMIT 1
+                            """,
+                            (
+                                doctor_id,
+                                day_end_utc,
+                                day_start_utc
+                            )
+                        )
+
+                        if cur.fetchone():
+
+                            skipped_existing_schedule += 1
+
+                            logger.info(
+                                "Existing schedule preserved: "
+                                "doctor=%s, date=%s",
+                                doctor_id,
+                                current_date
+                            )
+
+                            current_date += timedelta(days=1)
+                            continue
+
+                        # No slots exist for this doctor/date.
+                        occupied = []
+                        display_order = 1
+                        type_index = 0
+                        day_created = 0
+
+                        # -------------------------------------------------
+                        # 8. Process each availability window
+                        # -------------------------------------------------
+
+                        for pattern in day_patterns:
+
+                            start_value = as_time(
+                                pattern["start_time"]
+                            )
+
+                            end_value = as_time(
+                                pattern["end_time"]
+                            )
+
+                            if start_value >= end_value:
+
+                                skipped_invalid_hours += 1
+
+                                logger.warning(
+                                    "Invalid availability: doctor=%s",
+                                    doctor_id
+                                )
+                                continue
+
+                            window_start = datetime.combine(
+                                current_date,
+                                start_value
+                            )
+
+                            window_end = datetime.combine(
+                                current_date,
+                                end_value
+                            )
+
+                            cursor = max(window_start, current_ist)
+
+                            while cursor < window_end:
+
+                                # -----------------------------------------
+                                # Find an occupied interval covering cursor
+                                # -----------------------------------------
+
+                                covering = [
+                                    end
+                                    for start, end in occupied
+                                    if start <= cursor < end
+                                ]
+
+                                if covering:
+                                    cursor = max(covering)
+                                    continue
+
+                                # -----------------------------------------
+                                # Find the next occupied interval
+                                # -----------------------------------------
+
+                                next_occupied = [
+                                    start
+                                    for start, end in occupied
+                                    if start > cursor
+                                ]
+
+                                next_occupied_start = (
+                                    min(next_occupied)
+                                    if next_occupied
+                                    else window_end
+                                )
+
+                                # -----------------------------------------
+                                # Select a consultation type that fits.
+                                #
+                                # Selected types are cycled in catalogue
+                                # order. The doctor can later rearrange
+                                # or change the generated draft slots.
+                                # -----------------------------------------
+
+                                selected_type = None
+                                slot_end = None
+
+                                available_until = min(
+                                    window_end,
+                                    next_occupied_start
+                                )
+
+                                for offset in range(len(selected_types)):
+
+                                    index = (
+                                        type_index + offset
+                                    ) % len(selected_types)
+
+                                    candidate = selected_types[index]
+
+                                    candidate_end = (
+                                        cursor
+                                        + timedelta(
+                                            minutes=candidate["duration"]
+                                        )
+                                    )
+
+                                    if candidate_end <= available_until:
+                                        selected_type = candidate
+                                        slot_end = candidate_end
+
+                                        type_index = (
+                                            index + 1
+                                        ) % len(selected_types)
+
+                                        break
+
+                                if selected_type is None:
+
+                                    if next_occupied_start < window_end:
+                                        cursor = next_occupied_start
+                                        continue
+
+                                    break
+
+                                # -----------------------------------------
+                                # Final overlap validation
+                                # -----------------------------------------
+
+                                overlaps = any(
+                                    intervals_overlap(
+                                        cursor,
+                                        slot_end,
+                                        existing_start,
+                                        existing_end
+                                    )
+                                    for existing_start, existing_end
+                                    in occupied
+                                )
+
+                                if overlaps:
+                                    skipped_overlap += 1
+                                    cursor = slot_end
+                                    continue
+
+                                slot_start_utc = ist_to_utc(cursor)
+                                slot_end_utc = ist_to_utc(slot_end)
+
+                                # -----------------------------------------
+                                # Insert DRAFT slot
+                                # -----------------------------------------
+
+                                cur.execute(
+                                    """
+                                    INSERT IGNORE INTO appointment_slots
+                                    (
+                                        doctor_id,
+                                        consultation_type_id,
+                                        slot_start,
+                                        slot_end,
+                                        display_order,
+                                        status
+                                    )
+                                    VALUES (%s, %s, %s, %s, %s, 'DRAFT')
+                                    """,
+                                    (
+                                        doctor_id,
+                                        selected_type[
+                                            "consultation_type_id"
+                                        ],
+                                        slot_start_utc,
+                                        slot_end_utc,
+                                        display_order
+                                    )
+                                )
+
+                                if cur.rowcount == 1:
+
+                                    created += 1
+                                    day_created += 1
+                                    display_order += 1
+
+                                    occupied.append((cursor, slot_end))
+                                    occupied.sort(
+                                        key=lambda item: item[0]
+                                    )
+
+                                    logger.info(
+                                        "Draft slot created: doctor=%s, "
+                                        "date=%s, type=%s, start=%s, end=%s",
+                                        doctor_id,
+                                        current_date,
+                                        selected_type["name"],
+                                        cursor,
+                                        slot_end
+                                    )
+
+                                else:
+                                    skipped_overlap += 1
+
+                                cursor = slot_end
+
+                        logger.info(
+                            "Doctor %s, date %s: draft slots created=%s",
+                            doctor_id,
+                            current_date,
+                            day_created
+                        )
+
+                    finally:
+
+                        # Release the named lock.
+                        cur.execute(
+                            "SELECT RELEASE_LOCK(%s)",
+                            (lock_name,)
+                        )
+
+                    current_date += timedelta(days=1)
+
+        # -----------------------------------------------------
+        # 9. Commit
+        # -----------------------------------------------------
 
         conn.commit()
-        return response(status_code, result)
 
-    except APIError as exc:
-        if conn is not None:
-            conn.rollback()
-        return response(exc.status_code, {"message": exc.message})
+        logger.info("Slot materialisation committed successfully")
+
+        logger.info("========== SLOT SUMMARY ==========")
+        logger.info("Draft slots created: %s", created)
+        logger.info("Blackout dates skipped: %s", skipped_blackout)
+        logger.info(
+            "Doctors without selected types: %s",
+            skipped_no_types
+        )
+        logger.info(
+            "Existing schedules preserved: %s",
+            skipped_existing_schedule
+        )
+        logger.info(
+            "Invalid availability windows: %s",
+            skipped_invalid_hours
+        )
+        logger.info(
+            "Invalid consultation durations: %s",
+            skipped_invalid_duration
+        )
+        logger.info("Overlapping slots skipped: %s", skipped_overlap)
+        logger.info("Generation locks unavailable: %s", skipped_lock)
+        logger.info("Timezone: Asia/Kolkata")
+        logger.info("==================================")
+
+        return response(200, {
+            "message": "Draft slot generation completed",
+            "slots_created": created,
+            "blackout_dates_skipped": skipped_blackout,
+            "doctors_without_selected_types": skipped_no_types,
+            "existing_schedules_preserved": skipped_existing_schedule,
+            "invalid_working_hours_skipped": skipped_invalid_hours,
+            "invalid_durations_skipped": skipped_invalid_duration,
+            "overlapping_slots_skipped": skipped_overlap,
+            "generation_locks_unavailable": skipped_lock,
+            "days_ahead": days_ahead
+        })
 
     except Exception:
+
         if conn is not None:
             try:
                 conn.rollback()
             except Exception:
                 logger.exception("Database rollback failed")
-        logger.exception("Doctor slot management failed")
-        return response(500, {"message": "Slot management request failed"})
+
+        logger.exception("Slot Materialisation Lambda failed")
+
+        return response(500, {
+            "message": "Slot materialisation failed"
+        })
 
     finally:
+
         if conn is not None:
             try:
                 conn.close()
+                logger.info("Database connection closed")
             except Exception:
                 logger.exception("Database connection close failed")
