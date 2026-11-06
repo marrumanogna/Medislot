@@ -101,7 +101,15 @@
   const failBox = (r, retry) =>
     `<div class="card-body"><div class="alert alert-error" role="alert">${esc(errorMessage(r))} ${retry ? '<a href="" onclick="location.reload();return false">Retry</a>' : ""}</div></div>`;
 
-  function slotRows(slots) {
+  function slotRows(slots, reorder) {
+    const drafts = slots.filter((s) => s.status === "DRAFT");
+    const moveBtns = (s) => {
+      if (!reorder || s.status !== "DRAFT") return "";
+      const i = drafts.findIndex((d) => d.slot_id === s.slot_id);
+      return `<span style="display:inline-flex;gap:4px;margin-left:8px">
+        <button class="btn btn-ghost btn-sm" type="button" data-move="up" data-id="${esc(s.slot_id)}" aria-label="Move up" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button class="btn btn-ghost btn-sm" type="button" data-move="down" data-id="${esc(s.slot_id)}" aria-label="Move down" ${i === drafts.length - 1 ? "disabled" : ""}>↓</button></span>`;
+    };
     return slots.map((s) => `
       <div class="tl-row ${s.status === "BOOKED" ? "booked" : s.status === "BLOCKED" ? "blocked" : ""}">
         <div class="tl-time">
@@ -112,7 +120,7 @@
           <strong>${esc(s.consultation_type)}</strong>
           <span>Slot #${esc(s.slot_id)}</span>
         </div>
-        ${statusBadge(s.status)}
+        <div style="display:flex;align-items:center">${statusBadge(s.status)}${moveBtns(s)}</div>
       </div>
     `).join("");
   }
@@ -400,6 +408,7 @@
     const qs = new URLSearchParams(location.search);
     let day = /^\d{4}-\d{2}-\d{2}$/.test(qs.get("date") || "") ? qs.get("date") : today;
     let token = 0;
+    let daySlots = [];
 
     function strip() {
       const start = addDays(day, -((new Date(day + "T00:00:00Z").getUTCDay() + 6) % 7)); // Monday
@@ -419,6 +428,7 @@
       if (mine !== token) return;
       if (!r.ok) { $("#day-body").innerHTML = failBox(r, false); return; }
       const slots = r.data.slots || [];
+      daySlots = slots;
       const booked = slots.filter((s) => s.status === "BOOKED").length;
       $("#day-sub").textContent += ` · ${slots.length} slot${slots.length === 1 ? "" : "s"}, ${booked} booked`;
       const drafts = slots.filter((s) => s.status === "DRAFT").length;
@@ -426,7 +436,7 @@
       pubDay.classList.toggle("hidden", !drafts);
       pubDay.textContent = `Publish ${drafts} draft slot${drafts === 1 ? "" : "s"}`;
       $("#day-body").innerHTML = (drafts ? '<p style="margin:0 0 12px">These slots are drafts. Publish them so patients can book.</p>' : "")
-        + (slots.length ? `<div class="timeline">${slotRows(slots)}</div>`
+        + (slots.length ? `<div class="timeline">${slotRows(slots, true)}</div>`
           : emptyState(ICON_CAL, "No slots on this day", "Click Generate slots to create slots from your weekly hours. Days off and blackout dates have none."));
     }
     const go = (d) => { day = d; history.replaceState(null, "", "?date=" + d); load(); };
@@ -435,6 +445,19 @@
     $("#go-today").onclick = () => go(today);
     $("#day-pick").onchange = (e) => e.target.value && go(e.target.value);
     $("#weekstrip").onclick = (e) => { const b = e.target.closest("button[data-d]"); if (b) go(b.dataset.d); };
+    $("#day-body").onclick = async (e) => {
+      const b = e.target.closest("button[data-move]");
+      if (!b) return;
+      const ids = daySlots.filter((s) => s.status === "DRAFT").map((s) => s.slot_id);
+      const i = ids.indexOf(Number(b.dataset.id));
+      const k = b.dataset.move === "up" ? i - 1 : i + 1;
+      if (i < 0 || k < 0 || k >= ids.length) return;
+      [ids[i], ids[k]] = [ids[k], ids[i]];
+      b.disabled = true;
+      const r = await api("PUT", "doctor/slots", { date: day, slot_ids: ids });
+      if (!r.ok) toast(errorMessage(r, "Could not reorder slots."), "error");
+      load();
+    };
     $("#gen-slots").onclick = (e) => withBusy(e.currentTarget, async () => {
       const r = await api("POST", "doctor/slots", { action: "generate", days_ahead: 14 });
       if (!r.ok) { toast(errorMessage(r, "Could not generate slots."), "error"); return; }
