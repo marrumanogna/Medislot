@@ -1,4 +1,5 @@
 ﻿
+import json
 import logging
 from collections import defaultdict
 from datetime import datetime, time, timedelta, timezone
@@ -94,7 +95,49 @@ def handler(event, context):
 
     try:
         event = event or {}
-        days_ahead = int(event.get("days_ahead", 30))
+
+        request_context = event.get("requestContext") or {}
+        authorizer = request_context.get("authorizer") or {}
+
+        # EventBridge execution processes all doctors.
+        # API Gateway execution processes only the authenticated doctor.
+        doctor_id_filter = None
+
+        if request_context:
+            role = str(authorizer.get("role") or "").upper()
+
+            if role != "DOCTOR":
+                return response(403, {
+                    "message": "Only authenticated doctors can generate slots"
+                })
+
+            doctor_id_filter = authorizer.get("userId")
+
+            if not doctor_id_filter:
+                return response(401, {
+                    "message": "Authenticated doctor ID missing"
+                })
+
+            try:
+                doctor_id_filter = int(doctor_id_filter)
+            except (TypeError, ValueError):
+                return response(401, {
+                    "message": "Invalid authenticated doctor ID"
+                })
+
+            body = event.get("body") or {}
+
+            if isinstance(body, str):
+                body = json.loads(body)
+
+            if not isinstance(body, dict):
+                return response(400, {
+                    "message": "Request body must be a JSON object"
+                })
+
+            days_ahead = int(body.get("days_ahead", 14))
+        else:
+            days_ahead = int(event.get("days_ahead", 30))
 
         if not 1 <= days_ahead <= 90:
             return response(400, {
@@ -138,8 +181,10 @@ def handler(event, context):
                     end_time
                 FROM availability_patterns
                 WHERE is_active = TRUE
+                  AND (%s IS NULL OR doctor_id = %s)
                 ORDER BY doctor_id, day_of_week, start_time
-                """
+                """,
+                (doctor_id_filter, doctor_id_filter)
             )
 
             patterns = cur.fetchall()
@@ -169,10 +214,12 @@ def handler(event, context):
                        dcf.consultation_type_id
                 WHERE ct.is_active = TRUE
                   AND dcf.is_active = TRUE
+                  AND (%s IS NULL OR dcf.doctor_id = %s)
                 ORDER BY
                     dcf.doctor_id,
                     ct.consultation_type_id
-                """
+                """,
+                (doctor_id_filter, doctor_id_filter)
             )
 
             consultation_rows = cur.fetchall()
@@ -217,8 +264,14 @@ def handler(event, context):
                 SELECT doctor_id, blackout_date
                 FROM doctor_blackout_dates
                 WHERE blackout_date BETWEEN %s AND %s
+                  AND (%s IS NULL OR doctor_id = %s)
                 """,
-                (today, end_date)
+                (
+                    today,
+                    end_date,
+                    doctor_id_filter,
+                    doctor_id_filter
+                )
             )
 
             blackout_rows = cur.fetchall()

@@ -845,6 +845,12 @@ Resources:
       RestApiId: !Ref RestApi
       ParentId: !Ref DoctorResource
       PathPart: slots
+  DoctorSlotsGenerateResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref DoctorSlotsResource
+      PathPart: generate
 
   DoctorSlotIdResource:
     Type: AWS::ApiGateway::Resource
@@ -1039,7 +1045,18 @@ Resources:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorSlotManagementFunction.Arn}/invocations'
-
+  DoctorSlotsGeneratePostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref DoctorSlotsGenerateResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SlotMaterialiserFunction.Arn}/invocations'
   DoctorSlotIdPatchMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -1456,6 +1473,16 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt SlotMaterialiserSchedule.Arn
+  SlotMaterialiserApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SlotMaterialiserFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/${Stage}/POST/doctor/slots/generate
+        - ApiId: !Ref RestApi
+          Stage: !Ref Environment
   ApiDeploymentM4:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -1501,6 +1528,7 @@ Resources:
       - BlackoutDateIdPutMethod
       - DoctorSlotsPutMethod
       - DoctorSlotsPostMethod
+      - DoctorSlotsGeneratePostMethod
       - DoctorSlotIdPatchMethod
       - DoctorScheduleGetMethod
     Properties:
