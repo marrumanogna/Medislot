@@ -318,27 +318,56 @@ def reorder_schedule(cur, doctor_id, payload):
         day_start, day_end = date_range_utc(day)
         cur.execute(
             """
-            SELECT slot_id
+            SELECT slot_id, slot_start, slot_end
             FROM appointment_slots
             WHERE doctor_id = %s AND slot_start >= %s AND slot_start < %s
               AND status = 'DRAFT'
+            ORDER BY slot_start
             FOR UPDATE
             """,
             (doctor_id, day_start, day_end)
         )
-        existing = {int(row["slot_id"]) for row in cur.fetchall()}
+        rows = {int(row["slot_id"]): row for row in cur.fetchall()}
+        existing = set(rows)
         if set(slot_ids) != existing:
             raise APIError(400, "Provide every DRAFT slot ID for this date exactly once")
 
-        for order, slot_id in enumerate(slot_ids, start=1):
+        # Re-time the drafts so the new order is also the time order:
+        # keep the day's first start and the gaps (breaks), but lay the slots
+        # out back to back in the new order, each keeping its own duration.
+        chron = sorted(rows.values(), key=lambda row: row["slot_start"])
+        gaps = [
+            max(chron[i + 1]["slot_start"] - chron[i]["slot_end"], timedelta(0))
+            for i in range(len(chron) - 1)
+        ]
+        new_times = {}
+        cursor_time = chron[0]["slot_start"]
+        for k, sid in enumerate(slot_ids):
+            length = rows[sid]["slot_end"] - rows[sid]["slot_start"]
+            new_times[sid] = (cursor_time, cursor_time + length)
+            cursor_time = cursor_time + length + (gaps[k] if k < len(gaps) else timedelta(0))
+
+        # Park the drafts far away first so unique start times never clash.
+        marks = ", ".join(["%s"] * len(slot_ids))
+        cur.execute(
+            "UPDATE appointment_slots "
+            "SET slot_start = DATE_ADD(slot_start, INTERVAL 100 YEAR), "
+            "slot_end = DATE_ADD(slot_end, INTERVAL 100 YEAR) "
+            "WHERE doctor_id = %s AND status = 'DRAFT' AND slot_id IN (" + marks + ")",
+            (doctor_id, *slot_ids)
+        )
+        for sid in slot_ids:
+            ensure_no_overlap(cur, doctor_id, new_times[sid][0], new_times[sid][1])
+        for order, sid in enumerate(slot_ids, start=1):
             cur.execute(
                 """
-                UPDATE appointment_slots SET display_order = %s
+                UPDATE appointment_slots
+                SET slot_start = %s, slot_end = %s, display_order = %s
                 WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
                 """,
-                (order, slot_id, doctor_id)
+                (new_times[sid][0], new_times[sid][1], order, sid, doctor_id)
             )
-        return {"message": "Draft slots reordered", "date": day.isoformat(), "slot_ids": slot_ids}
+        return {"message": "Draft slots reordered and times updated", "date": day.isoformat(), "slot_ids": slot_ids}
     finally:
         unlock_schedule(cur, lock_name)
 
