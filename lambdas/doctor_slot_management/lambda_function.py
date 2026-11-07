@@ -330,14 +330,6 @@ def reorder_schedule(cur, doctor_id, payload):
         if set(slot_ids) != existing:
             raise APIError(400, "Provide every DRAFT slot ID for this date exactly once")
 
-        for slot_id in slot_ids:
-            cur.execute(
-                """
-                UPDATE appointment_slots SET display_order = %s
-                WHERE slot_id = %s AND doctor_id = %s AND status = 'DRAFT'
-                """,
-                (-slot_id, slot_id, doctor_id)
-            )
         for order, slot_id in enumerate(slot_ids, start=1):
             cur.execute(
                 """
@@ -432,6 +424,18 @@ def handler(event, context):
             or ""
         ).upper()
         slot_id = (event.get("pathParameters") or {}).get("slot_id")
+
+        if method == "POST" and str(payload.get("action", "create")).lower() == "generate":
+            # Generate DRAFT slots for this doctor only (same logic as the nightly job).
+            import slot_materialiser_impl
+            try:
+                days = max(1, min(int(payload.get("days_ahead", 14)), 30))
+            except (TypeError, ValueError):
+                raise APIError(400, "days_ahead must be a number")
+            out = slot_materialiser_impl.handler(
+                {"days_ahead": days, "doctor_id": doctor_id}, context
+            )
+            return response(out.get("statusCode", 200), json.loads(out.get("body") or "{}"))
 
         conn = dbconn(config())
         with conn.cursor() as cur:
