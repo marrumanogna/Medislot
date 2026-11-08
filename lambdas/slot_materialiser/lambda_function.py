@@ -386,6 +386,21 @@ def handler(event, context):
 
                         cur.execute(
                             """
+                            DELETE FROM appointment_slots
+                            WHERE doctor_id = %s
+                              AND status = 'DRAFT'
+                              AND slot_start < %s
+                              AND slot_end > %s
+                            """,
+                            (
+                                doctor_id,
+                                day_end_utc,
+                                day_start_utc
+                            )
+                        )
+
+                        cur.execute(
+                            """
                             SELECT slot_id
                             FROM appointment_slots
                             WHERE doctor_id = %s
