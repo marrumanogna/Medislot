@@ -459,7 +459,7 @@
       load();
     };
     $("#gen-slots").onclick = (e) => withBusy(e.currentTarget, async () => {
-      const r = await api("POST", "doctor/slots/generate", { days_ahead: 14 });
+      const r = await api("POST", "doctor/slots", { action: "generate", days_ahead: 14 });
       if (!r.ok) { toast(errorMessage(r, "Could not generate slots."), "error"); return; }
       const n = r.data.slots_created || 0;
       if (n) toast(`Created ${n} draft slot${n === 1 ? "" : "s"}. Review and publish them.`);
