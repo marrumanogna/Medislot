@@ -384,6 +384,19 @@ def handler(event, context):
                         # already published/booked slots.
                         # -------------------------------------------------
 
+                        # Rebuild drafts: delete this day's DRAFT slots only.
+                        # Published/booked slots are never touched.
+                        cur.execute(
+                            """
+                            DELETE FROM appointment_slots
+                            WHERE doctor_id = %s
+                              AND status = 'DRAFT'
+                              AND slot_start < %s
+                              AND slot_end > %s
+                            """,
+                            (doctor_id, day_end_utc, day_start_utc)
+                        )
+
                         cur.execute(
                             """
                             DELETE FROM appointment_slots
