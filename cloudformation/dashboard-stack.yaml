@@ -97,7 +97,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -eux
-          dnf install -y python3-pip
+          dnf install -y python3-pip mariadb105
           mkdir -p /opt/medislot/flask_session
 
           cat > /opt/medislot/.env <<'ENVVARS'
