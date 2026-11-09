@@ -315,10 +315,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          BUCKET_SUFFIX="initial"
+
           python scripts/deploy_stack.py \
             cloudformation/data-stack.yaml \
             "medislot-${ENVIRONMENT}-data" \
-            "Environment=${ENVIRONMENT}"
+            "Environment=${ENVIRONMENT}" \
+            "BucketSuffix=${BUCKET_SUFFIX}"
 
       - name: Package and upload Lambda code
         shell: bash
@@ -326,7 +329,7 @@ jobs:
           set -euo pipefail
 
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          BUCKET="medislot-${ENVIRONMENT}-artifacts-v2-${AWS_ACCOUNT_ID}"
+          BUCKET="medislot-${ENVIRONMENT}-artifacts-initial-${AWS_ACCOUNT_ID}"
 
           for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule doctor_slot_management patient_profile doctor_discovery appointments db_migrate; do
             tmp="$(mktemp -d)"
@@ -379,9 +382,9 @@ jobs:
             cloudformation/auth-stack.yaml \
             "medislot-${ENVIRONMENT}-auth" \
             "Environment=${ENVIRONMENT}" \
-            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-v2-${ACCOUNT}" \
+            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-initial-${ACCOUNT}" \
             "ArtifactPrefix=lambda/${GITHUB_SHA}" \
-            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-${ACCOUNT}-${AWS_REGION}"
+            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-initial-${ACCOUNT}-${AWS_REGION}"
 
       - name: Print deployed API outputs
         shell: bash
