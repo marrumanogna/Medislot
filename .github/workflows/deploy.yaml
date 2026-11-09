@@ -8,6 +8,7 @@ on:
     branches: 
       - feature/milestone-2
       - feature/milestone-4
+      - feature/milestone-5
     paths:
       - "cloudformation/**"
       - "lambdas/**"
