@@ -444,7 +444,7 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
         "SELECT s.slot_id, s.consultation_type_id, ct.name AS consultation_type, "
         "ct.duration_minutes, COALESCE(dcf.capacity, ct.capacity) AS capacity, dcf.fee, s.slot_start, s.slot_end, s.status, "
         "(SELECT COUNT(*) FROM appointments ap WHERE ap.slot_id = s.slot_id "
-        " AND ap.status = 'BOOKED') AS booked_count "
+        " AND ap.status = 'CONFIRMED') AS booked_count "
         "FROM appointment_slots s "
         "JOIN consultation_catalogue ct "
         "  ON ct.consultation_type_id = s.consultation_type_id "
