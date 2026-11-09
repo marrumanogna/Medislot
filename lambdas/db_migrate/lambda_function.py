@@ -503,7 +503,10 @@ def initialize_base_schema(cur, conn, schema_path=None):
 
     # First run: require exactly the known incomplete schema. A retry after a
     # previous interrupted run is allowed only when the legacy backup exists.
-    first_run = tables == EXPECTED_INITIAL_TABLES
+    first_run = tables in (
+    EXPECTED_INITIAL_TABLES,
+    {"schema_migrations"},
+    )
     retry_run = (
         LEGACY_USERS_TABLE in tables
         and "schema_migrations" in tables
@@ -547,7 +550,7 @@ def initialize_base_schema(cur, conn, schema_path=None):
                 "Refusing schema initialization: foreign-key dependencies involve users"
             )
 
-    if first_run:
+    if first_run and "users" in tables:
         cur.execute(
             f"RENAME TABLE users TO {_ident(LEGACY_USERS_TABLE)}"
         )
