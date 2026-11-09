@@ -91,8 +91,8 @@ jobs:
 
   deploy:
     name: deploy
-    if: github.ref == 'refs/heads/feature/milestone-4' && github.event_name != 'pull_request'
     needs: ci
+    if: github.ref == 'refs/heads/feature/milestone-5' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
