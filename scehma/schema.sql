@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS consultation_catalogue (
     name VARCHAR(120) NOT NULL,
     duration_minutes SMALLINT UNSIGNED NOT NULL,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
+    capacity SMALLINT UNSIGNED NOT NULL DEFAULT 1,
     created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
@@ -158,6 +159,7 @@ CREATE TABLE IF NOT EXISTS doctor_consultation_fees (
     consultation_type_id BIGINT UNSIGNED NOT NULL,
     fee DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     is_active TINYINT(1) NOT NULL DEFAULT 1,
+    capacity SMALLINT UNSIGNED NULL,
     created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
         ON UPDATE CURRENT_TIMESTAMP,
@@ -367,6 +369,50 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     migration_id VARCHAR(100) NOT NULL,
     applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (migration_id)
+) ENGINE=InnoDB;
+
+-- =========================================================
+-- MILESTONE 5: APPOINTMENTS (system of record) AND REFUND LEDGER
+-- No foreign keys: history must survive profile deletion.
+-- =========================================================
+CREATE TABLE IF NOT EXISTS appointments (
+    appointment_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    slot_id BIGINT UNSIGNED NOT NULL,
+    doctor_id BIGINT UNSIGNED NOT NULL,
+    patient_id BIGINT UNSIGNED NOT NULL,
+    consultation_type_id BIGINT UNSIGNED NOT NULL,
+    slot_start DATETIME NOT NULL,
+    slot_end DATETIME NOT NULL,
+    fee DECIMAL(10,2) NOT NULL,
+    status ENUM('CONFIRMED', 'COMPLETED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'NO_SHOW')
+        NOT NULL DEFAULT 'CONFIRMED',
+    active_slot_id BIGINT UNSIGNED NULL,
+    idempotency_key VARCHAR(128) NOT NULL,
+    booked_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    cancelled_at TIMESTAMP NULL,
+    cancel_reason VARCHAR(255) NULL,
+    PRIMARY KEY (appointment_id),
+    UNIQUE KEY uq_appt_patient_active_slot (patient_id, active_slot_id),
+    UNIQUE KEY uq_appt_patient_idem (patient_id, idempotency_key),
+    KEY idx_appt_slot_status (slot_id, status),
+    KEY idx_appt_patient_start (patient_id, slot_start),
+    KEY idx_appt_doctor_start (doctor_id, slot_start)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS refund_ledger (
+    refund_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    appointment_id BIGINT UNSIGNED NOT NULL,
+    patient_id BIGINT UNSIGNED NOT NULL,
+    fee DECIMAL(10,2) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    refund_percent TINYINT UNSIGNED NOT NULL,
+    tier ENUM('T1', 'T2', 'T3', 'T4', 'DOCTOR_CANCELLED', 'NO_SHOW') NOT NULL,
+    reason VARCHAR(255) NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (refund_id),
+    UNIQUE KEY uq_refund_appointment (appointment_id),
+    KEY idx_refund_patient (patient_id, refund_id),
+    CONSTRAINT chk_refund_amount CHECK (amount >= 0 AND amount <= fee)
 ) ENGINE=InnoDB;
 
 -- =========================================================

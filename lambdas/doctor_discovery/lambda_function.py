@@ -442,7 +442,9 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
 
     sql = (
         "SELECT s.slot_id, s.consultation_type_id, ct.name AS consultation_type, "
-        "ct.duration_minutes, dcf.fee, s.slot_start, s.slot_end, s.status "
+        "ct.duration_minutes, COALESCE(dcf.capacity, ct.capacity) AS capacity, dcf.fee, s.slot_start, s.slot_end, s.status, "
+        "(SELECT COUNT(*) FROM appointments ap WHERE ap.slot_id = s.slot_id "
+        " AND ap.status = 'BOOKED') AS booked_count "
         "FROM appointment_slots s "
         "JOIN consultation_catalogue ct "
         "  ON ct.consultation_type_id = s.consultation_type_id "
@@ -476,7 +478,11 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
         if local_day in blackouts:
             continue  # doctor is away that day
 
-        free = SEATS_PER_SLOT if slot["status"] == "AVAILABLE" else 0
+        total = int(slot.get("capacity") or SEATS_PER_SLOT)
+        if slot.get("booked_count") is None:
+            free = total if slot["status"] == "AVAILABLE" else 0
+        else:
+            free = max(total - int(slot["booked_count"]), 0)
         items.append({
             "slot_id": int(slot["slot_id"]),
             "consultation_type_id": int(slot["consultation_type_id"]),
@@ -486,7 +492,7 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
             "date": local_day.isoformat(),
             "slot_start": start_ist.isoformat(),
             "slot_end": _to_ist(slot["slot_end"]).isoformat(),
-            "seats_total": SEATS_PER_SLOT,
+            "seats_total": total,
             "seats_free": free,
             "status": slot["status"],
         })

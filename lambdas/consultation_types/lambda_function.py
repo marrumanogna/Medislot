@@ -84,12 +84,12 @@ def handler(event, context):
                 return response(400, {"message": "Invalid JSON body"})
 
             # Doctors choose which catalogue types they offer and set a fee.
-            allowed_fields = {"fee", "is_active"}
+            allowed_fields = {"fee", "is_active", "capacity"}
 
             if "fee" not in data or not set(data.keys()) <= allowed_fields:
                 return response(
                     400,
-                    {"message": "Send fee, and optionally is_active"}
+                    {"message": "Send fee, and optionally is_active and capacity"}
                 )
 
             is_active = data.get("is_active", True)
@@ -98,6 +98,12 @@ def handler(event, context):
                     400,
                     {"message": "is_active must be true or false"}
                 )
+
+            capacity = data.get("capacity")
+            if capacity is not None and (
+                isinstance(capacity, bool) or not isinstance(capacity, int) or not 2 <= capacity <= 10
+            ):
+                return response(400, {"message": "capacity must be a whole number from 2 to 10"})
 
             try:
                 fee = validate_fee(data["fee"])
@@ -150,6 +156,8 @@ def handler(event, context):
                                 NULL AS description,
                                 ct.duration_minutes,
                                 ct.is_active,
+                                ct.capacity AS max_capacity,
+                                COALESCE(dcf.capacity, ct.capacity) AS capacity,
                                 CAST(dcf.fee AS CHAR) AS fee,
                                 dcf.is_active AS doctor_is_active
                             FROM consultation_catalogue ct
@@ -187,6 +195,8 @@ def handler(event, context):
                             NULL AS description,
                             ct.duration_minutes,
                             ct.is_active,
+                            ct.capacity AS max_capacity,
+                            COALESCE(dcf.capacity, ct.capacity) AS capacity,
                             CAST(dcf.fee AS CHAR) AS fee,
                             dcf.is_active AS doctor_is_active
 
@@ -232,7 +242,7 @@ def handler(event, context):
 
                     cur.execute(
                         """
-                        SELECT consultation_type_id
+                        SELECT consultation_type_id, capacity
                         FROM consultation_catalogue
                         WHERE consultation_type_id = %s
                           AND is_active = 1
@@ -248,6 +258,12 @@ def handler(event, context):
                             {"message": "Active consultation type not found"}
                         )
 
+                    if capacity is not None and int(consultation_type["capacity"]) < 2:
+                        return response(
+                            400,
+                            {"message": "Seat capacity can only be set for Health Camp Sessions"}
+                        )
+
                     # Insert a fee if it does not exist.
                     # Otherwise update only the existing fee.
                     # The unique key prevents duplicate doctor/type records.
@@ -255,14 +271,15 @@ def handler(event, context):
                     cur.execute(
                         """
                         INSERT INTO doctor_consultation_fees
-                            (doctor_id, consultation_type_id, fee, is_active)
-                        VALUES (%s, %s, %s, %s)
+                            (doctor_id, consultation_type_id, fee, is_active, capacity)
+                        VALUES (%s, %s, %s, %s, %s)
 
                         ON DUPLICATE KEY UPDATE
                             fee = VALUES(fee),
-                            is_active = VALUES(is_active)
+                            is_active = VALUES(is_active),
+                            capacity = COALESCE(VALUES(capacity), capacity)
                         """,
-                        (doctor_id, type_id, fee, 1 if is_active else 0)
+                        (doctor_id, type_id, fee, 1 if is_active else 0, capacity)
                     )
 
                     conn.commit()

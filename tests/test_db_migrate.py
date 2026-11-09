@@ -108,6 +108,8 @@ def test_handler_applies_pending_and_records_it():
     assert result["applied"] == [
     "m4_001_doctor_search",
     "m4_002_users_first_last_name",
+    "m5_001_booking_engine",
+    "m5_002_frozen_rules",
     ]
     assert all(result["doctor_search_indexes"].values())
     assert conn.cur.sql_containing("INSERT INTO schema_migrations")

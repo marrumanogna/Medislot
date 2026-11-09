@@ -1,11 +1,11 @@
-/* Patient portal (Milestone 4: profile, doctor search, slot browsing).
+/* Patient portal (Milestone 5: booking, cancellation and refunds on top of search).
  * Live endpoints: patient/profile, doctors, doctors/filters, doctors/{id}, doctors/{id}/slots.
- * Appointments are not built yet (Milestone 5); those pages show a graceful "not switched on" state.
+ * Milestone 5: POST appointments, GET appointments, POST appointments/{id}/cancel, GET patient/refunds.
  */
 (() => {
   const { api, toast, esc, $, errorMessage, time12, money, isoDateIn, addDays, prettyDate, withBusy, initials } = MS;
   const page = $("#page").dataset.page;
-  const EP = { doctors: "doctors", appointments: "appointments", profile: "patient/profile" };
+  const EP = { doctors: "doctors", appointments: "appointments", profile: "patient/profile", refunds: "patient/refunds" };
 
   const pick = (o, ...keys) => { for (const k of keys) if (o && o[k] != null && o[k] !== "") return o[k]; return null; };
   const listOf = (d) => (Array.isArray(d) ? d : d?.items || d?.doctors || d?.appointments || d?.slots || []);
@@ -21,10 +21,14 @@
     const d = String(iso);
     return `${prettyDate(d.slice(0, 10), { year: undefined })} · ${time12(d.slice(11, 16))}`;
   };
+  const isOpen = (a) => ["CONFIRMED", "BOOKED"].includes(String(a.status || "CONFIRMED"));
+  const isUpcoming = (a) => isOpen(a) && (!startOf(a) || new Date(startOf(a)).getTime() >= Date.now());
+  const refundLine = (a) => (a.refund ? `<small class="muted">Refund: ${esc(money(a.refund.amount))} (${esc(a.refund.percent)}%)</small>` : "");
   const apptCard = (a) => {
     const status = String(pick(a, "status") || "CONFIRMED");
-    const cls = status === "CONFIRMED" ? "badge-blue" : status === "COMPLETED" ? "badge-green" : status === "NO_SHOW" ? "badge-amber" : "badge-grey";
-    return `<div class="tl-row" style="grid-template-columns:1fr auto"><div class="tl-body"><strong>${esc(pick(a, "doctorName", "doctor_name") || "Appointment")}</strong><span>${esc(fmtWhen(startOf(a)))}${pick(a, "consultationType", "consultation_type") ? " · " + esc(pick(a, "consultationType", "consultation_type")) : ""}</span></div><span class="badge ${cls}">${esc(status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()))}</span></div>`;
+    const cls = (status === "CONFIRMED" || status === "BOOKED") ? "badge-blue" : status === "COMPLETED" ? "badge-green" : status === "NO_SHOW" ? "badge-amber" : "badge-grey";
+    return `<div class="tl-row" style="grid-template-columns:1fr auto"><div class="tl-body"><strong>${esc(pick(a, "doctorName", "doctor_name") || "Appointment")}</strong><span>${esc(fmtWhen(startOf(a)))}${pick(a, "consultationType", "consultation_type") ? " · " + esc(pick(a, "consultationType", "consultation_type")) : ""}</span></div><span style="display:flex;gap:8px;align-items:center"><span class="badge ${cls}">${esc(status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()))}</span>${isUpcoming(a) ? `<button class="btn btn-ghost btn-sm" type="button" data-cancel="${esc(a.appointment_id)}">Cancel</button>` : ""}</span></div>`
+      .replace("</span></div><span", "</span>" + refundLine(a) + "</div><span");
   };
 
   const pages = {};
@@ -37,7 +41,7 @@
     }
     const all = listOf(r.data);
     const now = new Date().toISOString().slice(0, 16);
-    const up = all.filter((a) => String(a.status || "CONFIRMED") === "CONFIRMED" && String(startOf(a) || "9999") >= now);
+    const up = all.filter((a) => isUpcoming(a));
     $("#st-up").textContent = up.length;
     $("#st-past").textContent = all.length - up.length;
     up.sort((a, b) => String(startOf(a)).localeCompare(String(startOf(b))));
@@ -49,9 +53,25 @@
     if (!r.ok) { $("#upcoming").innerHTML = problem(r); $("#history").innerHTML = ""; return; }
     const all = listOf(r.data);
     const now = new Date().toISOString().slice(0, 16);
-    const up = all.filter((a) => String(a.status || "CONFIRMED") === "CONFIRMED" && String(startOf(a) || "9999") >= now).sort((a, b) => String(startOf(a)).localeCompare(String(startOf(b))));
+    const up = all.filter((a) => isUpcoming(a)).sort((a, b) => String(startOf(a)).localeCompare(String(startOf(b))));
     const past = all.filter((a) => !up.includes(a)).sort((a, b) => String(startOf(b)).localeCompare(String(startOf(a))));
     $("#upcoming").innerHTML = up.length ? `<div class="timeline">${up.map(apptCard).join("")}</div>` : empty(ICON_CAL, "No upcoming appointments", "Book a time with a doctor and it will show up here.", '<a class="btn btn-primary btn-sm" href="/patient/doctors">Find a doctor</a>');
+    const render = () => pages.appointments();
+    document.body.onclick = async (e) => {
+      const b = e.target.closest("button[data-cancel]");
+      if (!b || !window.confirm("Cancel this appointment? Your refund depends on how close it is to the start time.")) return;
+      await withBusy(b, async () => {
+        const c = await api("DELETE", `${EP.appointments}/${encodeURIComponent(b.dataset.cancel)}`);
+        if (!c.ok) { toast(errorMessage(c, "Could not cancel."), "error"); return; }
+        const rf = c.data.appointment?.refund;
+        toast(rf ? `Cancelled. Refund: ${money(rf.amount)} (${rf.percent}%).` : "Cancelled.");
+        render();
+      });
+    };
+    const rr = await api("GET", EP.refunds);
+    if ($("#refunds")) $("#refunds").innerHTML = !rr.ok ? problem(rr) : (rr.data.items || []).length
+      ? `<div class="timeline">${rr.data.items.map((f) => `<div class="tl-row" style="grid-template-columns:1fr auto"><div class="tl-body"><strong>${esc(f.doctor_name || "Appointment")}</strong><span>${esc(fmtWhen(f.slot_start))} · ${esc(f.consultation_type || "")} · ${esc(f.tier.replace(/_/g, " ").toLowerCase())}</span></div><strong>${esc(money(f.amount))}</strong></div>`).join("")}</div><p class="muted" style="margin:10px 24px">Total refunded: ${esc(money(rr.data.total_refunded))}</p>`
+      : empty(ICON_CAL, "No refunds yet", "Refunds for cancelled appointments appear here.");
     $("#history").innerHTML = past.length ? `<div class="timeline">${past.map(apptCard).join("")}</div>` : empty(ICON_CAL, "No past appointments", "Completed and cancelled visits are listed here.");
   };
 
@@ -199,11 +219,21 @@
       body.querySelectorAll("[data-s]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
       const s = dlgState.chosen;
       $("#dd-pick").textContent = `Selected: ${fmtWhen(s.slot_start)} · ${s.consultation_type}`;
+      $("#dd-book").disabled = false; $("#dd-book").textContent = "Book this slot"; $("#dd-book").title = "";
     });
     body.addEventListener("change", (e) => {
       if (e.target.id !== "slot-from" || !e.target.value) return;
       dlgState.from = e.target.value < isoDateIn(tz) ? isoDateIn(tz) : e.target.value;
       $("#range-host").innerHTML = rangeBar();
+      loadSlots();
+    });
+    $("#dd-book").onclick = (e) => withBusy(e.currentTarget, async () => {
+      const s = dlgState.chosen; if (!s) return;
+      // One key per click on this slot: retries of the same click replay the same appointment.
+      dlgState.keys ||= {}; const key = (dlgState.keys[s.slot_id] ||= (crypto.randomUUID ? crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(16).slice(2)}`));
+      const r = await api("POST", EP.appointments, { slot_id: s.slot_id, idempotency_key: key });
+      if (r.ok) { delete dlgState.keys[s.slot_id]; toast(r.data.idempotent_replay ? "Already booked: showing your original appointment." : "Appointment booked."); }
+      else { if (r.status !== 409 || r.data?.code !== "REQUEST_IN_PROGRESS") delete dlgState.keys[s.slot_id]; toast(errorMessage(r, "Could not book this slot."), "error"); }
       loadSlots();
     });
     $("#dd-close").onclick = () => dlg.close();

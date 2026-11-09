@@ -237,9 +237,97 @@ def migrate_m4_002_users_first_last_name(cur):
     return changes
 
 
+def migrate_m5_001_booking_engine(cur):
+    """Milestone 5: seat capacity, appointments and the refund ledger."""
+
+    changes = {"columns_added": [], "tables": ["appointments", "refund_ledger"]}
+
+    if ensure_column(
+        cur, "consultation_catalogue", "capacity",
+        "SMALLINT UNSIGNED NOT NULL DEFAULT 1",
+    ):
+        changes["columns_added"].append("capacity")
+
+    # Health Camp Sessions are multi-capacity. Only raised while still the default.
+    cur.execute(
+        """
+        INSERT INTO consultation_catalogue
+            (consultation_type_id, name, duration_minutes, is_active, capacity)
+        VALUES (4, 'Health Camp Session', 60, 1, 10)
+        ON DUPLICATE KEY UPDATE capacity = IF(capacity = 1, VALUES(capacity), capacity)
+        """
+    )
+
+    cur.execute("""CREATE TABLE IF NOT EXISTS appointments (
+    appointment_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    slot_id BIGINT UNSIGNED NOT NULL,
+    doctor_id BIGINT UNSIGNED NOT NULL,
+    patient_id BIGINT UNSIGNED NOT NULL,
+    consultation_type_id BIGINT UNSIGNED NOT NULL,
+    slot_start DATETIME NOT NULL,
+    slot_end DATETIME NOT NULL,
+    fee DECIMAL(10,2) NOT NULL,
+    status ENUM('CONFIRMED', 'COMPLETED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'NO_SHOW')
+        NOT NULL DEFAULT 'CONFIRMED',
+    active_slot_id BIGINT UNSIGNED NULL,
+    idempotency_key VARCHAR(128) NOT NULL,
+    booked_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    cancelled_at TIMESTAMP NULL,
+    cancel_reason VARCHAR(255) NULL,
+    PRIMARY KEY (appointment_id),
+    UNIQUE KEY uq_appt_patient_active_slot (patient_id, active_slot_id),
+    UNIQUE KEY uq_appt_patient_idem (patient_id, idempotency_key),
+    KEY idx_appt_slot_status (slot_id, status),
+    KEY idx_appt_patient_start (patient_id, slot_start),
+    KEY idx_appt_doctor_start (doctor_id, slot_start)
+) ENGINE=InnoDB""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS refund_ledger (
+    refund_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    appointment_id BIGINT UNSIGNED NOT NULL,
+    patient_id BIGINT UNSIGNED NOT NULL,
+    fee DECIMAL(10,2) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    refund_percent TINYINT UNSIGNED NOT NULL,
+    tier ENUM('T1', 'T2', 'T3', 'T4', 'DOCTOR_CANCELLED', 'NO_SHOW') NOT NULL,
+    reason VARCHAR(255) NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (refund_id),
+    UNIQUE KEY uq_refund_appointment (appointment_id),
+    KEY idx_refund_patient (patient_id, refund_id),
+    CONSTRAINT chk_refund_amount CHECK (amount >= 0 AND amount <= fee)
+) ENGINE=InnoDB""")
+    return changes
+
+
+def migrate_m5_002_frozen_rules(cur):
+    """Align with the Frozen Rule Set: CONFIRMED state, T1..T4 refund tiers and a
+    per-doctor seat count for Health Camp Sessions. Safe on fresh and upgraded databases."""
+
+    changes = {"columns_added": []}
+    if ensure_column(cur, "doctor_consultation_fees", "capacity", "SMALLINT UNSIGNED NULL"):
+        changes["columns_added"].append("doctor_consultation_fees.capacity")
+
+    cur.execute(
+        "ALTER TABLE appointments MODIFY status ENUM('BOOKED', 'CONFIRMED', 'COMPLETED', "
+        "'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'NO_SHOW') NOT NULL DEFAULT 'CONFIRMED'"
+    )
+    cur.execute("UPDATE appointments SET status = 'CONFIRMED' WHERE status = 'BOOKED'")
+    cur.execute(
+        "ALTER TABLE appointments MODIFY status ENUM('CONFIRMED', 'COMPLETED', "
+        "'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'NO_SHOW') NOT NULL DEFAULT 'CONFIRMED'"
+    )
+    cur.execute(
+        "ALTER TABLE refund_ledger MODIFY tier ENUM('T1', 'T2', 'T3', 'T4', "
+        "'DOCTOR_CANCELLED', 'NO_SHOW', 'FULL', 'PARTIAL', 'NONE') NOT NULL"
+    )
+    return changes
+
+
 MIGRATIONS = (
     ("m4_001_doctor_search", migrate_m4_doctor_search),
     ("m4_002_users_first_last_name", migrate_m4_002_users_first_last_name),
+    ("m5_001_booking_engine", migrate_m5_001_booking_engine),
+    ("m5_002_frozen_rules", migrate_m5_002_frozen_rules),
 )
 
 
@@ -361,6 +449,8 @@ EXPECTED_FINAL_TABLES = {
     "availability_patterns",
     "doctor_blackout_dates",
     "appointment_slots",
+    "appointments",
+    "refund_ledger",
     "specialization_options",
     "experience_options",
     "qualification_options",

@@ -104,6 +104,9 @@
   function slotRows(slots, reorder) {
     const drafts = slots.filter((s) => s.status === "DRAFT");
     const moveBtns = (s) => {
+      if (reorder && ["AVAILABLE", "BOOKED"].includes(s.status)) {
+        return `<span style="margin-left:8px"><button class="btn btn-ghost btn-sm" type="button" data-cancel-slot="${esc(s.slot_id)}">Cancel slot</button></span>`;
+      }
       if (!reorder || s.status !== "DRAFT") return "";
       const i = drafts.findIndex((d) => d.slot_id === s.slot_id);
       return `<span style="display:inline-flex;gap:4px;margin-left:8px">
@@ -257,6 +260,7 @@
         return `<div class="consultation-fee-card">
           <div class="consultation-fee-card-head"><div><h3>${esc(t.name)}</h3><p>${esc(t.duration_minutes)} minutes</p></div></div>
           <label class="check"><input type="checkbox" id="on-${id}" ${on ? "checked" : ""}> <span>I offer this consultation</span></label>
+          ${Number(t.max_capacity) > 1 ? `<div class="field"><label for="cap-${id}">Seats per session (2 to ${esc(t.max_capacity)})</label><input class="input" id="cap-${id}" type="number" min="2" max="${esc(t.max_capacity)}" step="1" value="${esc(t.capacity ?? t.max_capacity)}"></div>` : ""}
           <div class="field">
             <label for="fee-${id}">Your fee (₹)</label>
             <input class="input fee-input" id="fee-${id}" type="number" min="0" max="99999999.99" step="0.01" placeholder="Enter fee" value="${esc(fee)}">
@@ -280,8 +284,15 @@
       else if (fee && !validFee(fee)) error.textContent = "Enter a non-negative fee with up to 2 decimal places.";
       if (error.textContent) { error.classList.remove("hidden"); input.focus(); return; }
       if (!fee) fee = "0";
+      const capInput = $(`#cap-${CSS.escape(id)}`, body);
+      const payload = { fee, is_active: offered };
+      if (capInput) {
+        const cap = Number(capInput.value);
+        if (!Number.isInteger(cap) || cap < 2 || cap > Number(capInput.max)) { error.textContent = `Seats must be a whole number from 2 to ${capInput.max}.`; error.classList.remove("hidden"); return; }
+        payload.capacity = cap;
+      }
       await withBusy(button, async () => {
-        const r = await api("PATCH", `${EP.types}/${encodeURIComponent(id)}`, { fee, is_active: offered });
+        const r = await api("PATCH", `${EP.types}/${encodeURIComponent(id)}`, payload);
         if (r.ok) { toast(offered ? "Saved. Patients can book this consultation." : "Saved. This consultation is hidden from patients."); await load(); }
         else { error.textContent = errorMessage(r, "Could not save this consultation."); error.classList.remove("hidden"); }
       });
@@ -446,6 +457,17 @@
     $("#day-pick").onchange = (e) => e.target.value && go(e.target.value);
     $("#weekstrip").onclick = (e) => { const b = e.target.closest("button[data-d]"); if (b) go(b.dataset.d); };
     $("#day-body").onclick = async (e) => {
+      const cs = e.target.closest("button[data-cancel-slot]");
+      if (cs) {
+        if (!window.confirm("Cancel this slot? Every patient booked in it is refunded in full.")) return;
+        await withBusy(cs, async () => {
+          const r = await api("POST", `doctor/slots/${encodeURIComponent(cs.dataset.cancelSlot)}/cancel`, {});
+          if (r.ok) toast(`Slot cancelled. ${r.data.cancelled_appointments} patient(s) refunded in full.`);
+          else toast(errorMessage(r, "Could not cancel the slot."), "error");
+          load();
+        });
+        return;
+      }
       const b = e.target.closest("button[data-move]");
       if (!b) return;
       const ids = daySlots.filter((s) => s.status === "DRAFT").map((s) => s.slot_id);

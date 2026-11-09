@@ -300,6 +300,62 @@ Resources:
       Type: String
       Value: '7'
 
+  RefundT1HoursParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/refund/t1-hours'
+      Type: String
+      Value: '48'
+
+  RefundT2HoursParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/refund/t2-hours'
+      Type: String
+      Value: '24'
+
+  RefundT3HoursParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/refund/t3-hours'
+      Type: String
+      Value: '6'
+
+  RefundT1PercentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/refund/t1-percent'
+      Type: String
+      Value: '100'
+
+  RefundT2PercentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/refund/t2-percent'
+      Type: String
+      Value: '75'
+
+  RefundT3PercentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/refund/t3-percent'
+      Type: String
+      Value: '50'
+
+  RefundT4PercentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/refund/t4-percent'
+      Type: String
+      Value: '0'
+
+  BookingMaxUpcomingPerDoctorParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/booking/max-upcoming-per-doctor'
+      Type: String
+      Value: '3'
+
 Outputs:
   DBEndpoint:
     Value: !GetAtt MediSlotDatabase.Endpoint.Address
