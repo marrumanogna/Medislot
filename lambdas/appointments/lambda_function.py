@@ -260,8 +260,8 @@ class SlotStore:
             out = self.t.update_item(
                 Key={"slot_id": str(slot_id)},
                 UpdateExpression="SET booked_count = booked_count + :one, version = version + :one",
-                ConditionExpression="version = :v AND booked_count < capacity AND #s = :open",
-                ExpressionAttributeNames={"#s": "status"},
+                ConditionExpression="version = :v AND booked_count < #cap AND #s = :open",
+                ExpressionAttributeNames={"#s": "status", "#cap": "capacity"},
                 ExpressionAttributeValues={":one": 1, ":v": seen_version, ":open": "OPEN"},
                 ReturnValues="ALL_NEW",
             )
