@@ -5,7 +5,9 @@ Mandatory Test 2 (idempotency): the same Idempotency-Key replayed creates exactl
 Refund windows are read from SSM in production; these tests assume the documented defaults (48/24/6 h, 100/75/50/0 %).
 """
 
+import random
 import threading
+import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +29,24 @@ def book(patient, slot_id, key=None):
         headers={"Authorization": f"Bearer {patient.token}", "Idempotency-Key": key or uuid.uuid4().hex},
         json={"slot_id": slot_id}, timeout=60,
     )
+
+
+def safe_code(response):
+    try:
+        return response.json().get("code")
+    except ValueError:
+        return None
+
+
+def book_with_retry(patient, slot_id, key, attempts=6):
+    """A real client retries throttling and 5xx with the SAME Idempotency-Key. That is what the key is for,
+    and it can never create a second appointment. 409 and 4xx answers are final and never retried."""
+    for attempt in range(attempts):
+        r = book(patient, slot_id, key)
+        if r.status_code not in (429, 500, 502, 503, 504):
+            return r, attempt
+        time.sleep(random.uniform(0, 0.25 * 2 ** attempt))
+    return r, attempts
 
 
 def expected_tier(start, now):
@@ -74,15 +94,17 @@ def test_concurrency_exactly_capacity_bookings_succeed(api, tag, camp):
 
     def worker(patient):
         barrier.wait()
-        r = book(patient, slot_id)
-        results.append((r.status_code, r.json().get("code")))
+        r, retries = book_with_retry(patient, slot_id, uuid.uuid4().hex)
+        results.append((r.status_code, safe_code(r), retries))
 
     threads = [threading.Thread(target=worker, args=(p,)) for p in patients]
     [t.start() for t in threads]
     [t.join() for t in threads]
 
-    assert Counter(s for s, _ in results) == {201: 3, 409: 21}, results
-    assert {c for s, c in results if s == 409} <= {"SLOT_FULL", "SLOT_BUSY"}
+    print("status counts:", dict(Counter(s for s, _, _ in results)),
+          "| requests that needed a client retry:", sum(1 for *_, n in results if n))
+    assert Counter(s for s, _, _ in results) == {201: 3, 409: 21}, results
+    assert {c for s, c, _ in results if s == 409} <= {"SLOT_FULL", "SLOT_BUSY"}
     assert seats_free(api, camp, "10:00") == 0
 
 
