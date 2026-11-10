@@ -31,10 +31,8 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub medislot-${Environment}-dashboard-${AWS::AccountId}-${AWS::Region}
-
       VersioningConfiguration:
         Status: Enabled
-
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
