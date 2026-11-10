@@ -1,0 +1,23 @@
+{% from "partials/icons.html" import icon %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#0e2740">
+  <title>{% block title %}MediSlot{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230e2740'/%3E%3Cpath d='M16 8v16M8 16h16' stroke='%235fe0d3' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/medislot.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% block body %}{% endblock %}
+  <div id="toasts" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='js/core.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

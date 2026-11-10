@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}Login — MediSlot{% endblock %}
+{% block body %}
+<div class="auth">
+  <aside class="auth-side">
+    {% include "partials/brand.html" %}
+    <div>
+      <h2>Welcome back to MediSlot.</h2>
+      <p>Sign in to manage your appointments and your time.</p>
+      <ul>
+        <li>{{ icon('shield') }}Separate patient and doctor access</li>
+        <li>{{ icon('clock') }}Sessions that expire and can be revoked</li>
+        <li>{{ icon('calendar') }}Always-current availability</li>
+      </ul>
+    </div>
+    <small style="color:#8fa9bf">© 2026 MediSlot</small>
+    <div class="ring"></div>
+  </aside>
+
+  <main class="auth-main">
+    <div class="auth-top">{% include "partials/brand.html" %}</div>
+    <div class="auth-card">
+      <h1>Log in</h1>
+      <p class="sub">Choose how you use MediSlot, then enter your details.</p>
+
+      {% if registered %}<div class="alert alert-ok" style="margin-bottom:16px">Account created. Log in to continue.</div>{% endif %}
+      {% if expired %}<div class="alert alert-info" style="margin-bottom:16px">Your session ended. Log in again to continue.</div>{% endif %}
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for c, m in messages %}<div class="alert alert-error" style="margin-bottom:16px">{{ m }}</div>{% endfor %}
+      {% endwith %}
+      {% if error %}<div class="alert alert-error" style="margin-bottom:16px" role="alert">{{ error }}</div>{% endif %}
+
+      <form method="post" action="{{ url_for('login', next=request.args.get('next')) }}" id="login-form" novalidate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="field">
+          <span class="label" id="role-label">I am a</span>
+          <div class="segmented" role="radiogroup" aria-labelledby="role-label" style="width:100%;grid-auto-columns:1fr">
+            <input type="radio" name="role" id="role-patient" value="patient" {{ 'checked' if role == 'patient' }}>
+            <label for="role-patient">Patient</label>
+            <input type="radio" name="role" id="role-doctor" value="doctor" {{ 'checked' if role == 'doctor' }}>
+            <label for="role-doctor">Doctor</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="email">Email address</label>
+          <input class="input" id="email" name="email" type="email" autocomplete="email" required value="{{ email }}" placeholder="you@example.com" autofocus>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="pw-wrap">
+            <input class="input" id="password" name="password" type="password" autocomplete="current-password" required placeholder="Enter your password">
+            <button type="button" class="pw-toggle" aria-controls="password" aria-pressed="false">Show</button>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-block btn-lg" type="submit" data-busy="Signing in…">Log in</button>
+      </form>
+
+      <p class="auth-foot">Don't have an account? <a href="{{ url_for('register', role=role) }}" id="signup-link">Sign Up</a></p>
+      <p class="auth-foot" style="margin-top:8px"><a href="{{ url_for('landing') }}">Back to home</a></p>
+    </div>
+  </main>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  const pw = document.getElementById('password');
+  const tgl = document.querySelector('.pw-toggle');
+  tgl.addEventListener('click', () => {
+    const show = pw.type === 'password';
+    pw.type = show ? 'text' : 'password';
+    tgl.textContent = show ? 'Hide' : 'Show';
+    tgl.setAttribute('aria-pressed', show);
+  });
+  document.querySelectorAll('input[name=role]').forEach(r => r.addEventListener('change', () => {
+    document.getElementById('signup-link').href = '/register?role=' + r.value;
+  }));
+  document.getElementById('login-form').addEventListener('submit', (e) => {
+    const b = e.target.querySelector('button[type=submit]');
+    setTimeout(() => { b.disabled = true; b.textContent = b.dataset.busy; }, 0);
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "portal.html" %}
+{% from "partials/icons.html" import icon %}
+
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2 id="day-title">Day view</h2>
+      <p id="day-sub"></p>
+    </div>
+    <div class="daybar">
+      <button class="btn btn-ghost btn-sm" id="prev-day" type="button">←</button>
+      <input class="input" type="date" id="day-pick">
+      <button class="btn btn-ghost btn-sm" id="next-day" type="button">→</button>
+      <button class="btn btn-quiet btn-sm" id="go-today" type="button">Today</button>
+    </div>
+  </div>
+
+  <div class="weekstrip" id="weekstrip"></div>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;">
+    <button class="btn btn-primary btn-sm" id="gen-slots" type="button">
+      Generate Slots
+    </button>
+    <button class="btn btn-primary btn-sm" id="pub-day" type="button">
+      Publish draft slots
+    </button>
+    <button class="btn btn-quiet btn-sm" id="pub-all" type="button">
+      Publish all drafts
+    </button>
+  </div>
+
+  <div id="day-body"></div>
+</section>
+{% endblock %}

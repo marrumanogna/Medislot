@@ -1,0 +1,29 @@
+{% extends "portal.html" %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+<section class="card">
+  <form id="search-form" class="card-body" novalidate>
+    <div class="form-grid" style="grid-template-columns:repeat(4,minmax(0,1fr));align-items:end">
+      <div class="field"><label for="q-spec">Specialisation</label><select class="input" id="q-spec" name="specialisation"><option value="">Any specialisation</option></select></div>
+      <div class="field"><label for="q-name">Doctor name</label><input class="input" id="q-name" name="name" maxlength="100" placeholder="First name or surname"></div>
+      <div class="field"><label for="q-hosp">Hospital</label><input class="input" id="q-hosp" name="hospital" maxlength="200" placeholder="Starts with…"></div>
+      <div class="field"><label for="q-city">City</label><input class="input" id="q-city" name="city" maxlength="100" list="city-list" placeholder="Starts with…"><datalist id="city-list"></datalist></div>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn btn-ghost" type="button" id="clear-filters">Clear</button>
+      <button class="btn btn-primary" type="submit" data-busy="Searching…">{{ icon('search') }}Search</button>
+    </div>
+  </form>
+</section>
+<div id="results"></div>
+<div id="pager" class="pager"></div>
+<dialog id="doc-dlg"><div class="dlg">
+  <div class="dlg-head"><h2 id="dd-name"></h2><p id="dd-meta"></p></div>
+  <div class="dlg-body" id="dd-body"></div>
+  <div class="dlg-foot">
+    <span id="dd-pick" class="muted" style="margin-right:auto"></span>
+    <button class="btn btn-ghost" id="dd-close" type="button">Close</button>
+    <button class="btn btn-teal" id="dd-book" type="button" disabled>Book this slot</button>
+  </div>
+</div></dialog>
+{% endblock %}

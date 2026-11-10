@@ -1,0 +1,34 @@
+{% extends "portal.html" %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+<form id="profile-form" class="card" novalidate>
+  <div class="card-head"><div><h2>Professional profile</h2><p>This is what patients see when they find you.</p></div></div>
+  <div class="card-body" id="profile-body"><div class="skel-block"><div class="skeleton"></div><div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:85%"></div></div></div>
+</form>
+<template id="profile-tpl">
+  <div class="photo-edit" style="margin-bottom:24px">
+    <div class="avatar" id="p-avatar">?</div>
+    <div>
+      <strong id="p-name"></strong>
+      <p class="muted" id="p-photo-note" style="font-size:13.5px">JPEG, PNG or WebP, up to 5 MB.</p>
+      <label class="btn btn-ghost btn-sm" style="margin-top:8px" for="photo-file">Upload photo</label>
+      <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp" class="sr-only">
+    </div>
+  </div>
+  <div class="form-grid">
+    <div class="field"><label for="f-licence">Medical licence number</label><input class="input" id="f-licence" name="licence_number" required maxlength="100"></div>
+    <div class="field"><label for="f-spec">Specialization</label><input class="input" id="f-spec" name="specialization" required maxlength="120"></div>
+    <div class="field full"><span class="label">Qualifications</span><div class="tags" id="f-qual"><input aria-label="Qualifications" placeholder="Type and press Enter"></div></div>
+    <div class="field"><label for="f-exp">Years of experience</label><input class="input" id="f-exp" name="experience_years" type="number" min="0" max="80" required></div>
+    <div class="field"><label for="f-fee">Consultation fee</label><input class="input" id="f-fee" name="consultation_fee" type="number" min="0" step="0.01"></div>
+    <div class="field full"><label for="f-hosp">Hospital / clinic name</label><input class="input" id="f-hosp" name="hospital_name" required maxlength="200"></div>
+    <div class="field full"><label for="f-addr">Hospital / clinic address</label><input class="input" id="f-addr" name="hospital_address" required maxlength="500"></div>
+    <div class="field full"><label for="f-city">Hospital / clinic city</label><input class="input" id="f-city" name="hospital_city" maxlength="100"><span class="hint">Patients find you by this city.</span></div>
+    <div class="field full"><span class="label">Languages spoken</span><div class="tags" id="f-lang"><input aria-label="Languages spoken" placeholder="Type and press Enter"></div></div>
+    <div class="field full"><label for="f-tz">Timezone</label><input class="input" id="f-tz" name="timezone" list="tz-list" required><datalist id="tz-list"></datalist><span class="hint">Availability and schedule times use this timezone.</span></div>
+    <div class="field full"><label for="f-bio">Bio</label><textarea class="input" id="f-bio" name="bio" maxlength="5000"></textarea></div>
+  </div>
+  <div class="alert alert-error hidden" id="profile-err" role="alert" style="margin-top:16px"></div>
+  <div style="margin-top:22px;display:flex;justify-content:flex-end"><button class="btn btn-primary" type="submit" data-busy="Saving…">Save changes</button></div>
+</template>
+{% endblock %}

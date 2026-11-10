@@ -1,0 +1,425 @@
+AWSTemplateFormatVersion: "2010-09-09"
+# MediSlot Milestone 2: IAM permissions for CI/CD deployment.
+Description: >
+  MediSlot IAM deployment permissions managed as customer-managed
+  policies to avoid the IAM inline-policy aggregate size limit.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  GitHubActionsRoleName:
+    Type: String
+    Default: MediSlotGitHubActionsRole
+
+Resources:
+
+  # Core CloudFormation, SSM and STS permissions
+  MediSlotGitHubActionsCorePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub MediSlot-${Environment}-GitHubActionsCorePolicy
+      Description: Core deployment and configuration permissions for MediSlot.
+      Roles:
+        - !Ref GitHubActionsRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManageMediSlotLambdaBasePolicy
+            Effect: Allow
+            Action:
+              - iam:CreatePolicy
+              - iam:DeletePolicy
+              - iam:GetPolicy
+              - iam:GetPolicyVersion
+              - iam:ListPolicyVersions
+              - iam:CreatePolicyVersion
+              - iam:DeletePolicyVersion
+              - iam:SetDefaultPolicyVersion
+              - iam:ListEntitiesForPolicy
+              - iam:TagPolicy
+              - iam:UntagPolicy
+              - iam:ListPolicyTags
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/MediSlot-${Environment}-LambdaBasePolicy
+
+          - Sid: ManageMediSlotAuthLambdaRoles
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/MediSlot-${Environment}-*Role
+
+          - Sid: AttachMediSlotLambdaBasePolicy
+            Effect: Allow
+            Action:
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/MediSlot-${Environment}-*Role
+            Condition:
+              ArnEquals:
+                iam:PolicyARN: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/MediSlot-${Environment}-LambdaBasePolicy
+
+          - Sid: PassMediSlotAuthRolesToLambda
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/MediSlot-${Environment}-*Role
+            Condition:
+              StringEquals:
+                iam:PassedToService: lambda.amazonaws.com
+          - Sid: PassDashboardInstanceRoleToEC2
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - arn:aws:iam::195710498029:role/instanceRole
+            Condition:
+              StringEquals:
+                iam:PassedToService: ec2.amazonaws.com
+          - Sid: ManageMediSlotLambdaFunctions
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:DeleteFunction
+              - lambda:GetFunction
+              - lambda:GetFunctionConfiguration
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:TagResource
+              - lambda:UntagResource
+              - lambda:ListTags
+              - lambda:GetPolicy
+              - lambda:AddPermission
+              - lambda:RemovePermission
+            Resource:
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:medislot-${Environment}-*
+          - Sid: InvokeMediSlotRdsConnectionCheck
+            Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:medislot-${Environment}-rds-connection-check
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:medislot-${Environment}-db-migrate
+
+  # VPC/networking and S3 permissionss
+  MediSlotGitHubActionsNetworkS3Policy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub MediSlot-${Environment}-GitHubActionsNetworkS3Policy
+      Description: Networking and MediSlot S3 bucket permissions.
+      Roles:
+        - !Ref GitHubActionsRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManageMediSlotNetworkResources
+            Effect: Allow
+            Action:
+              - ec2:CreateVpc
+              - ec2:DeleteVpc
+              - ec2:DescribeVpcs
+              - ec2:DescribeVpcAttribute
+              - ec2:ModifyVpcAttribute
+              - ec2:CreateInternetGateway
+              - ec2:DeleteInternetGateway
+              - ec2:DescribeInternetGateways
+              - ec2:AttachInternetGateway
+              - ec2:DetachInternetGateway
+              - ec2:CreateSubnet
+              - ec2:DeleteSubnet
+              - ec2:DescribeSubnets
+              - ec2:ModifySubnetAttribute
+              - ec2:CreateRouteTable
+              - ec2:DeleteRouteTable
+              - ec2:DescribeRouteTables
+              - ec2:CreateRoute
+              - ec2:DeleteRoute
+              - ec2:AssociateRouteTable
+              - ec2:DisassociateRouteTable
+              - ec2:CreateSecurityGroup
+              - ec2:DeleteSecurityGroup
+              - ec2:DescribeSecurityGroups
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:CreateVpcEndpoint
+              - ec2:DeleteVpcEndpoints
+              - ec2:DescribeVpcEndpoints
+              - ec2:DescribeVpcEndpointServices
+              - ec2:DescribeAvailabilityZones
+              - ec2:DescribePrefixLists
+              - ec2:CreateTags
+              - ec2:DeleteTags
+              - ec2:DescribeTags
+              - ec2:RunInstances
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceStatus
+              - ec2:DescribeImages
+              - ec2:DescribeKeyPairs
+              - ec2:DescribeIamInstanceProfileAssociations
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: ManageMediSlotS3Buckets
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:GetBucketLocation
+              - s3:ListBucket
+              - s3:GetBucketTagging
+              - s3:PutBucketTagging
+              - s3:GetEncryptionConfiguration
+              - s3:PutEncryptionConfiguration
+              - s3:GetBucketPublicAccessBlock
+              - s3:PutBucketPublicAccessBlock
+              - s3:GetBucketVersioning
+              - s3:PutBucketVersioning
+              - s3:GetBucketPolicy
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:GetBucketOwnershipControls
+              - s3:PutBucketOwnershipControls
+              - s3:GetLifecycleConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:GetBucketCORS
+              - s3:PutBucketCORS
+              - s3:GetBucketLogging
+              - s3:PutBucketLogging
+              - s3:GetBucketNotification
+              - s3:PutBucketNotification
+              - s3:GetBucketWebsite
+              - s3:PutBucketWebsite
+              - s3:GetBucketAcl
+              - s3:PutBucketAcl
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::medislot-${Environment}-*
+
+          - Sid: ManageMediSlotS3Objects
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+              - s3:ListMultipartUploadParts
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::medislot-${Environment}-*/*
+
+  # RDS and DynamoDB permissions
+  MediSlotGitHubActionsDataPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub MediSlot-${Environment}-GitHubActionsDataPolicy
+      Description: RDS, DynamoDB, backup and service-linked role permissions.
+      Roles:
+        - !Ref GitHubActionsRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManageMediSlotRDSSubnetGroups
+            Effect: Allow
+            Action:
+              - rds:CreateDBSubnetGroup
+              - rds:DescribeDBSubnetGroups
+              - rds:ModifyDBSubnetGroup
+              - rds:DeleteDBSubnetGroup
+              - rds:AddTagsToResource
+              - rds:RemoveTagsFromResource
+              - rds:ListTagsForResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:subgrp:medislot-${Environment}-data-*
+
+          - Sid: CreateMediSlotRDSInstances
+            Effect: Allow
+            Action:
+              - rds:CreateDBInstance
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: DescribeMediSlotRDSInstances
+            Effect: Allow
+            Action:
+              - rds:DescribeDBInstances
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: ManageMediSlotRDSInstances
+            Effect: Allow
+            Action:
+              - rds:ModifyDBInstance
+              - rds:DeleteDBInstance
+              - rds:AddTagsToResource
+              - rds:RemoveTagsFromResource
+              - rds:ListTagsForResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:medislot-${Environment}-*
+
+          - Sid: ManageMediSlotRDSSnapshots
+            Effect: Allow
+            Action:
+              - rds:CreateDBSnapshot
+              - rds:DescribeDBSnapshots
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref AWS::Region
+
+          - Sid: CreateRDSServiceLinkedRole
+            Effect: Allow
+            Action:
+              - iam:CreateServiceLinkedRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS
+            Condition:
+              StringLike:
+                iam:AWSServiceName: rds.amazonaws.com
+
+          - Sid: ManageMediSlotDynamoDBTables
+            Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:DescribeTable
+              - dynamodb:UpdateTable
+              - dynamodb:DeleteTable
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - dynamodb:ListTagsOfResource
+              - dynamodb:DescribeTimeToLive
+              - dynamodb:UpdateTimeToLive
+              - dynamodb:DescribeContinuousBackups
+              - dynamodb:UpdateContinuousBackups
+            Resource:
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/MediSlot-${Environment}-*
+
+  # API Gateway logging and its IAM role
+  MediSlotGitHubActionsApiGatewayPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub MediSlot-${Environment}-GitHubActionsApiGatewayPolicy
+      Description: API Gateway account configuration and logging role permissions.
+      Roles:
+        - !Ref GitHubActionsRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+
+          - Sid: ConfigureApiGatewayCloudWatchAccount
+            Effect: Allow
+            Action:
+              - apigateway:PATCH
+              - apigateway:GET
+            Resource:
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/account
+          - Sid: ManageMediSlotRestApis
+            Effect: Allow
+            Action:
+              - apigateway:GET
+              - apigateway:POST
+              - apigateway:PUT
+              - apigateway:PATCH
+              - apigateway:DELETE
+            Resource:
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/*
+
+          - Sid: ManageMediSlotApiGatewayTags
+            Effect: Allow
+            Action:
+              - apigateway:GET
+              - apigateway:POST
+              - apigateway:PUT
+              - apigateway:DELETE
+            Resource:
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+         
+          - Sid: ManageApiGatewayCloudWatchRole
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:UpdateAssumeRolePolicy
+              - iam:PassRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/MediSlotApiGatewayCloudWatchRole
+
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    DependsOn:
+      - MediSlotGitHubActionsApiGatewayPolicy
+    Properties:
+      RoleName: MediSlotApiGatewayCloudWatchRole
+      Description: Allows API Gateway to publish execution logs to CloudWatch.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Tags:
+        - Key: Project
+          Value: MediSlot
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    DependsOn:
+      - MediSlotGitHubActionsApiGatewayPolicy
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+Outputs:
+  DeploymentRoleName:
+    Description: GitHub Actions deployment role receiving the policies.
+    Value: !Ref GitHubActionsRoleName
+
+  CorePolicyArn:
+    Description: Core deployment permissions policy ARN.
+    Value: !Ref MediSlotGitHubActionsCorePolicy
+
+  NetworkS3PolicyArn:
+    Description: Networking and S3 permissions policy ARN.
+    Value: !Ref MediSlotGitHubActionsNetworkS3Policy
+
+  DataPolicyArn:
+    Description: RDS and DynamoDB permissions policy ARN.
+    Value: !Ref MediSlotGitHubActionsDataPolicy
+
+  ApiGatewayPolicyArn:
+    Description: API Gateway permissions policy ARN.
+    Value: !Ref MediSlotGitHubActionsApiGatewayPolicy

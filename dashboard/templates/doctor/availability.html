@@ -1,0 +1,21 @@
+{% extends "portal.html" %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+<section class="card">
+  <div class="card-head"><div><h2>Weekly availability</h2><p id="tz-note">Times are in your profile timezone.</p></div><button class="btn btn-primary btn-sm" id="add-pattern" type="button">Add hours</button></div>
+  <div id="week-body"><div class="skel-block"><div class="skeleton"></div><div class="skeleton" style="width:75%"></div></div></div>
+</section>
+<p class="muted" style="font-size:13.5px">Open slots are generated from these hours for the next 30 days. Changes apply to future slots.</p>
+<dialog id="pat-dlg"><form method="dialog" id="pat-form" novalidate>
+  <div class="dlg-head"><h2 id="pat-title">Add hours</h2><p>Choose the days these hours repeat every week.</p></div>
+  <div class="dlg-body">
+    <div class="field"><span class="label" id="days-label">Days</span><div class="days" id="pat-days" role="group" aria-labelledby="days-label"></div></div>
+    <div class="form-grid">
+      <div class="field"><label for="pat-start">From</label><input class="input" id="pat-start" type="time" value="09:00" required></div>
+      <div class="field"><label for="pat-end">To</label><input class="input" id="pat-end" type="time" value="17:00" required></div>
+    </div>
+    <div class="alert alert-error hidden" id="pat-err" role="alert"></div>
+  </div>
+  <div class="dlg-foot"><button class="btn btn-ghost" type="button" id="pat-cancel">Cancel</button><button class="btn btn-primary" type="submit" data-busy="Saving…">Save</button></div>
+</form></dialog>
+{% endblock %}

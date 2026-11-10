@@ -1,4 +1,4 @@
-name: MediSlot Milestone 2 CI and Deployment
+﻿name: MediSlot Milestone 2 CI and Deployment
 
 on:
   pull_request:
@@ -6,6 +6,7 @@ on:
 
   push:
     branches: 
+      - main
       - feature/milestone-2
       - feature/milestone-4
       - feature/milestone-5
@@ -92,7 +93,7 @@ jobs:
   deploy:
     name: deploy
     needs: ci
-    if: github.ref == 'refs/heads/feature/milestone-5' && github.event_name != 'pull_request'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/milestone-5') &&       github.event_name != 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
@@ -315,10 +316,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          BUCKET_SUFFIX="initial"
+
           python scripts/deploy_stack.py \
             cloudformation/data-stack.yaml \
             "medislot-${ENVIRONMENT}-data" \
-            "Environment=${ENVIRONMENT}"
+            "Environment=${ENVIRONMENT}" \
+            "BucketSuffix=${BUCKET_SUFFIX}"
 
       - name: Package and upload Lambda code
         shell: bash
@@ -326,7 +330,7 @@ jobs:
           set -euo pipefail
 
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          BUCKET="medislot-${ENVIRONMENT}-artifacts-v2-${AWS_ACCOUNT_ID}"
+          BUCKET="medislot-${ENVIRONMENT}-artifacts-initial-${AWS_ACCOUNT_ID}"
 
           for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule doctor_slot_management patient_profile doctor_discovery appointments db_migrate; do
             tmp="$(mktemp -d)"
@@ -379,9 +383,9 @@ jobs:
             cloudformation/auth-stack.yaml \
             "medislot-${ENVIRONMENT}-auth" \
             "Environment=${ENVIRONMENT}" \
-            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-v2-${ACCOUNT}" \
+            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-initial-${ACCOUNT}" \
             "ArtifactPrefix=lambda/${GITHUB_SHA}" \
-            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-${ACCOUNT}-${AWS_REGION}"
+            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-initial-${ACCOUNT}-${AWS_REGION}"
 
       - name: Print deployed API outputs
         shell: bash
@@ -404,7 +408,7 @@ jobs:
 
           aws lambda invoke \
             --function-name "medislot-${ENVIRONMENT}-db-migrate" \
-            --payload '{"correlationId":"github-actions-migrate"}' \
+            --payload '{"correlationId":"github-actions-migration"}' \
             --cli-binary-format raw-in-base64-out \
             --query FunctionError \
             --output text \
@@ -458,3 +462,4 @@ jobs:
             --output text)"
 
           pytest tests/integration -q -rs
+# Re-trigger Milestone 5 deployment after Gitleaks false-positive exclusion

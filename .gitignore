@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# MediSlot local and generated files
+.env.*
+!.env.example
+dashboard/.env
+dashboard/flask_session/
+*.zip
