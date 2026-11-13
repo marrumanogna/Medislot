@@ -157,7 +157,7 @@ def build_search_queries(filters, page, page_size):
     page_sql = (
         "SELECT dp.user_id AS doctor_id, dp.full_name, dp.specialization, "
         "dp.qualifications, dp.experience_years, dp.hospital_name, "
-        "dp.hospital_city, dp.languages_spoken "
+        "dp.hospital_city, dp.languages_spoken, dp.photo_key "
         f"{SEARCH_FROM} WHERE {where} "
         "ORDER BY dp.full_name, dp.user_id LIMIT %s OFFSET %s"
     )
@@ -191,6 +191,28 @@ def _to_ist(value):
 
 def _money(value):
     return str(value) if value is not None else None
+
+
+def _photo_url(doctor_id, photo_key):
+    """Create a short-lived URL for a doctor's private S3 profile photo."""
+    bucket = os.environ.get("DOCTOR_PHOTOS_BUCKET")
+
+    if (
+        not photo_key
+        or not bucket
+        or not photo_key.startswith(f"doctors/{doctor_id}/")
+    ):
+        return None
+
+    return s3.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": bucket,
+            "Key": photo_key,
+            "ResponseContentDisposition": "inline",
+        },
+        ExpiresIn=300,
+    )
 
 
 def _parse_doctor_id(event):
@@ -270,6 +292,8 @@ def search_doctors(cur, parsed, now_utc):
             "hospital_name": row["hospital_name"],
             "hospital_city": row["hospital_city"],
             "languages_spoken": _json_list(row["languages_spoken"]),
+            # Added: temporary S3 URL for the patient's doctor-search card.
+            "photo_url": _photo_url(doctor_id, row.get("photo_key")),
             "fee_from": _money(fee.get("fee_from")),
             "fee_to": _money(fee.get("fee_to")),
             "next_available": _to_ist(next_slot).isoformat() if next_slot else None,

@@ -1,3 +1,4 @@
+
 /* Patient portal (Milestone 5: booking, cancellation and refunds on top of search).
  * Live endpoints: patient/profile, doctors, doctors/filters, doctors/{id}, doctors/{id}/slots.
  * Milestone 5: POST appointments, GET appointments, POST appointments/{id}/cancel, GET patient/refunds.
@@ -108,15 +109,55 @@
           out.innerHTML = `<div class="card">${empty(ICON_SEARCH, "No doctors found", "Try a broader name or hospital, or clear some filters.")}</div>`;
           return;
         }
+
         out.innerHTML = `<div class="pcards">${items.map((d, i) => {
           const name = d.full_name || "Doctor";
           const fee = d.fee_from != null ? `From ${money(d.fee_from)}` : "Fee on request";
           const next = d.next_available ? `Next free: ${esc(fmtWhen(d.next_available))}` : "No open slots right now";
-          return `<article class="pcard"><header><div class="avatar">${esc(initials(name))}</div><div><h3>${esc(name)}</h3><span class="muted">${esc(d.specialization || "")}${d.experience_years ? " · " + esc(d.experience_years) + (+d.experience_years === 1 ? " yr" : " yrs") : ""}</span></div></header>
+
+          // Added: display the doctor's photo when photo_url is returned by the API.
+          const photo = d.photo_url
+            ? `<img class="avatar doctor-photo"
+                src="${esc(d.photo_url)}"
+                alt="${esc(name)}"
+                loading="lazy"
+                data-doctor-photo>`
+            : "";
+
+          // Added: show initials when no photo URL is available.
+          const avatar = `
+            ${photo}
+            <div class="avatar doctor-initials" ${photo ? "hidden" : ""}>
+              ${esc(initials(name))}
+            </div>
+          `;
+
+          return `<article class="pcard">
+            <header>
+              ${avatar}
+              <div>
+                <h3>${esc(name)}</h3>
+                <span class="muted">
+                  ${esc(d.specialization || "")}
+                  ${d.experience_years ? " · " + esc(d.experience_years) + (+d.experience_years === 1 ? " yr" : " yrs") : ""}
+                </span>
+              </div>
+            </header>
             <div class="meta"><span>${esc(d.hospital_name || "")}</span><span>${esc(d.hospital_city || "")}</span></div>
             <div class="meta"><span>${next}</span></div>
             <footer><strong>${esc(fee)}</strong><button class="btn btn-ghost btn-sm" type="button" data-i="${i}">View profile &amp; slots</button></footer></article>`;
         }).join("")}</div>`;
+
+        // Added: if the photo fails to load, replace it with the doctor's initials.
+        out.querySelectorAll("[data-doctor-photo]").forEach((img) => {
+          img.addEventListener("error", () => {
+            const fallback = document.createElement("div");
+            fallback.className = "avatar doctor-initials";
+            fallback.textContent = initials(img.alt || "Doctor");
+            img.replaceWith(fallback);
+          }, { once: true });
+        });
+
         const from = (page - 1) * PAGE_SIZE + 1, to = from + items.length - 1;
         pager.innerHTML = `<span class="muted">Showing ${from}–${to} of ${total}</span>
           <span><button class="btn btn-ghost btn-sm" type="button" data-p="${page - 1}" ${page <= 1 ? "disabled" : ""}>Previous</button>
@@ -139,6 +180,21 @@
 
     const renderProfile = (p) => {
       let html = "";
+
+      // Added: display the doctor's photo in the individual profile dialog.
+      if (p.photo_url) {
+        html += `
+          <div class="doctor-profile-photo-container">
+            <img
+              class="doctor-profile-photo"
+              src="${esc(p.photo_url)}"
+              alt="${esc(p.full_name || "Doctor")}"
+              data-profile-photo
+            >
+          </div>
+        `;
+      }
+
       if (p.bio) html += `<p>${esc(p.bio)}</p>`;
       const facts = [
         p.qualifications?.length ? ["Qualifications", p.qualifications.join(", ")] : null,
@@ -201,6 +257,15 @@
       const prof = await api("GET", `${EP.doctors}/${d.doctor_id}`);
       body.innerHTML = (prof.ok ? renderProfile(prof.data) : problem(prof)) +
         `<div><strong>Available slots</strong><div id="range-host"></div><div id="slots-area" style="margin-top:10px"></div></div>`;
+
+      // Added: remove a broken profile photo if its URL cannot be loaded.
+      const profilePhoto = body.querySelector("[data-profile-photo]");
+      if (profilePhoto) {
+        profilePhoto.addEventListener("error", () => {
+          profilePhoto.remove();
+        }, { once: true });
+      }
+
       $("#range-host").innerHTML = rangeBar();
       loadSlots();
     });

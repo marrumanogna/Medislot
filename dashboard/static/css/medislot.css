@@ -878,6 +878,37 @@ dialog form, dialog .dlg { display: grid; }
   }
 }
 
+.doctor-photo {
+    width: 46px;
+    height: 46px;
+    min-width: 46px;
+    border-radius: 50%;
+    object-fit: cover;
+    object-position: center;
+    display: block;
+    flex-shrink: 0;
+    border: 2px solid #e5eeee;
+}
+
+.doctor-initials[hidden] {
+    display: none !important;
+}
+
+.doctor-profile-photo-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+}
+
+.doctor-profile-photo {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    object-fit: cover;
+    object-position: center;
+    border: 3px solid #e5eeee;
+}
+
 /* Milestone 4: doctor search + slot browsing */
 .pager { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
 .range-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
