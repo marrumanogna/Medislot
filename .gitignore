@@ -225,3 +225,5 @@ __marimo__/
 dashboard/.env
 dashboard/flask_session/
 *.zip
+
+.venv/
