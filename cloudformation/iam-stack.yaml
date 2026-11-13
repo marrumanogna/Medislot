@@ -29,6 +29,34 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          # CloudFormation deployment permissions for GitHub Actions.
+          # Allows deployment of MediSlot stacks for the selected environment.
+          - Sid: ManageMediSlotCloudFormationStacks
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:ContinueUpdateRollback
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/medislot-${Environment}-*/*
+
+          # These read/validation operations require wildcard resource scope.
+          - Sid: ReadAndValidateMediSlotCloudFormation
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:ListStacks
+              - cloudformation:ValidateTemplate
+            Resource: "*"
+
           - Sid: ManageMediSlotLambdaBasePolicy
             Effect: Allow
             Action:
