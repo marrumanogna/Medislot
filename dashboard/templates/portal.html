@@ -57,5 +57,8 @@
 {% endblock %}
 {% block scripts %}
 <script>document.getElementById('today-label').textContent = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });</script>
-<script src="{{ url_for('static', filename='js/' + portal + '.js') }}"></script>
+<script
+  src="{{ url_for('static', filename='js/' + portal + '.js', v=config.get('ASSET_VERSION', '20261113')) }}"
+  defer
+></script>
 {% endblock %}

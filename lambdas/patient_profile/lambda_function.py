@@ -1,38 +1,12 @@
-"""Patient profile: create, read, update, delete (own profile only).
-
-Routes (all behind the JWT authorizer, which also enforces role = PATIENT on
-anything under /patient/):
-
-    GET    /patient/profile                 read my profile
-    POST   /patient/profile                 create my profile
-    PUT    /patient/profile                 replace my profile
-    PATCH  /patient/profile                 change some fields
-    DELETE /patient/profile                 delete my profile
-    GET    /patient/profile/{patient_id}    allowed only when it is my own id
-
-Data isolation
---------------
-The identity used for every query is the user id the authorizer put in
-requestContext - which comes from the verified JWT. It is never read from the
-URL, query string or body. The only route that carries a patient id
-({patient_id}) first looks up the *caller's own* patient id and returns 403
-unless the two match, without ever querying the requested record. So another
-patient's profile is neither readable nor distinguishable from a missing one.
-
-Deleting a profile removes the patients row only. The login account stays, so
-the person can sign in again and re-create a profile with POST.
-"""
-
 import logging
 import re
 from datetime import date
-
 from common import config, dbconn, body, response, emit, correlation
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# JSON (camelCase, matching POST /auth/register/patient) -> column
+# JSON (camelCase, Connecting frontend names to database names)
 FIELD_COLUMNS = {
     "fullName": "full_name",
     "dateOfBirth": "date_of_birth",
@@ -50,8 +24,9 @@ STRING_LIMITS = {
     "city": 100,
     "emergencyContact": 20,
 }
-PHONE_FIELDS = ("phone", "emergencyContact")
-# 7-20 characters: optional leading + or (, then digits, spaces, dashes, brackets.
+PHONE_FIELDS = ("phone", "emergencyContact"
+"")
+# It can contain spaces, brackets and hyphens,+ or (,digits.
 PHONE_RE = re.compile(r"^[+(]?[0-9][0-9 ()\-]{5,17}[0-9]$")
 MIN_DOB = date(1900, 1, 1)
 
@@ -111,13 +86,6 @@ def _clean_optional_text(field, value):
 
 
 def validate_profile(data, method, today=None):
-    """Return {column: value} ready for SQL, or raise ValidationError.
-
-    POST   - fullName required; other fields optional.
-    PUT    - replaces every field: omitted optional fields are cleared, an
-             omitted fullName is kept.
-    PATCH  - changes only the fields supplied (at least one).
-    """
     if not isinstance(data, dict):
         raise ValidationError("Invalid JSON body")
 

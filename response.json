@@ -1,0 +1,1 @@
+{"statusCode": 403, "headers": {"content-type": "application/json", "cache-control": "no-store"}, "body": "{\"message\": \"A valid authenticated doctor account is required\", \"correlationId\": \"492ba6b6-0ef7-467d-85a1-9df4e5d5b6a2\"}"}

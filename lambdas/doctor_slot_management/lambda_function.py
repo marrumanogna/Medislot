@@ -11,7 +11,7 @@ logger.setLevel(logging.INFO)
 IST = ZoneInfo("Asia/Kolkata")
 UTC = timezone.utc
 
-
+#This class creates our own error messages
 class APIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
