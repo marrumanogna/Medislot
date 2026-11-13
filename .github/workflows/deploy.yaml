@@ -386,6 +386,36 @@ jobs:
             "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-initial-${ACCOUNT}" \
             "ArtifactPrefix=lambda/${GITHUB_SHA}" \
             "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-initial-${ACCOUNT}-${AWS_REGION}"
+      - name: Deploy Dashboard stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+
+          API_URL="$(aws cloudformation describe-stacks \
+            --stack-name "medislot-${ENVIRONMENT}-auth" \
+            --region "$AWS_REGION" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue | [0]" \
+            --output text)"
+
+          FLASK_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+
+          python scripts/deploy_stack.py \
+            cloudformation/dashboard-stack.yaml \
+            "medislot-${ENVIRONMENT}-dashboard" \
+            "Environment=${ENVIRONMENT}" \
+            "ApiBaseUrl=${API_URL}" \
+            "FlaskSecret=${FLASK_SECRET}"
+
+          BUCKET="medislot-${ENVIRONMENT}-dashboard-${ACCOUNT}-${AWS_REGION}"
+
+          aws s3 cp dashboard.tgz \
+            "s3://${BUCKET}/dashboard.tgz" \
+            --region "$AWS_REGION" \
+            --sse AES256
+
+          echo "Dashboard bundle uploaded successfully."
 
       - name: Print deployed API outputs
         shell: bash
