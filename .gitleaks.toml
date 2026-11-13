@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Vendored third-party code"
+paths = ['''doctor_profile_package/jwt/.*''']
