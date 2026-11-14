@@ -1,19 +1,3 @@
--- =========================================================
--- MEDISLOT - CURRENT RDS MYSQL SCHEMA
--- Target: MySQL 8.0.16+
---
--- This is the clean-install schema for the current MediSlot
--- design. It reflects the consultation catalogue + doctor fee
--- separation and the current appointment_slots foreign key.
---
--- Application DATETIME values (slot_start/slot_end) are stored
--- as UTC. The application displays them in Asia/Kolkata (IST).
---
--- IMPORTANT:
--- 1. Run this only against a NEW/EMPTY database.
--- 2. This is not an ALTER/migration script for an existing RDS.
--- 3. Do not include migration backup tables in a clean schema.
--- =========================================================
 
 CREATE DATABASE IF NOT EXISTS medislot
   CHARACTER SET utf8mb4

@@ -48,6 +48,15 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/medislot-${Environment}-*/*
 
+          # Allow CloudFormation to resolve the public latest Amazon Linux 2023 AMI parameter.
+          - Sid: ReadAmazonLinuxLatestAmiParameter
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
           # These read/validation operations require wildcard resource scope.
           - Sid: ReadAndValidateMediSlotCloudFormation
             Effect: Allow
@@ -145,7 +154,13 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:medislot-${Environment}-rds-connection-check
               - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:medislot-${Environment}-db-migrate
-
+          - Sid: ReadAmazonLinuxLatestAmiParameter
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
   # VPC/networking and S3 permissionss
   MediSlotGitHubActionsNetworkS3Policy:
     Type: AWS::IAM::ManagedPolicy
