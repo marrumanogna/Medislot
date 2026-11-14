@@ -316,7 +316,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          BUCKET_SUFFIX="initial"
+          BUCKET_SUFFIX="rebuild-20261114"
 
           python scripts/deploy_stack.py \
             cloudformation/data-stack.yaml \
@@ -324,13 +324,42 @@ jobs:
             "Environment=${ENVIRONMENT}" \
             "BucketSuffix=${BUCKET_SUFFIX}"
 
+      - name: Copy existing S3 data
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+
+          OLD_ARTIFACTS="medislot-${ENVIRONMENT}-artifacts-initial-${ACCOUNT}"
+          NEW_ARTIFACTS="medislot-${ENVIRONMENT}-artifacts-rebuild-20261114-${ACCOUNT}"
+
+          OLD_PHOTOS="medislot-${ENVIRONMENT}-doctor-photos-initial-${ACCOUNT}-${AWS_REGION}"
+          NEW_PHOTOS="medislot-${ENVIRONMENT}-doctor-photos-rebuild-20261114-${ACCOUNT}-${AWS_REGION}"
+
+          echo "Copying existing Lambda artifacts..."
+          aws s3 sync \
+            "s3://${OLD_ARTIFACTS}" \
+            "s3://${NEW_ARTIFACTS}" \
+            --region "$AWS_REGION" \
+            --only-show-errors
+
+          echo "Copying existing doctor photos..."
+          aws s3 sync \
+            "s3://${OLD_PHOTOS}" \
+            "s3://${NEW_PHOTOS}" \
+            --region "$AWS_REGION" \
+            --only-show-errors
+
+          echo "Existing S3 data copied successfully."
+
       - name: Package and upload Lambda code
         shell: bash
         run: |
           set -euo pipefail
 
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          BUCKET="medislot-${ENVIRONMENT}-artifacts-initial-${AWS_ACCOUNT_ID}"
+          BUCKET="medislot-${ENVIRONMENT}-artifacts-rebuild-20261114-${AWS_ACCOUNT_ID}"
 
           for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule doctor_slot_management patient_profile doctor_discovery appointments db_migrate; do
             tmp="$(mktemp -d)"
@@ -383,9 +412,9 @@ jobs:
             cloudformation/auth-stack.yaml \
             "medislot-${ENVIRONMENT}-auth" \
             "Environment=${ENVIRONMENT}" \
-            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-initial-${ACCOUNT}" \
+            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-rebuild-20261114-${ACCOUNT}" \
             "ArtifactPrefix=lambda/${GITHUB_SHA}" \
-            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-initial-${ACCOUNT}-${AWS_REGION}"
+            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-rebuild-20261114-${ACCOUNT}-${AWS_REGION}"
       - name: Deploy Dashboard stack
         shell: bash
         run: |
