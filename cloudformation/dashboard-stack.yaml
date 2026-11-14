@@ -22,22 +22,14 @@ Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  DashboardBucketName:
+    Type: String
+    Description: Existing S3 bucket containing the dashboard bundle
 
 Conditions:
   HasKey: !Not [!Equals [!Ref KeyName, ""]]
 
 Resources:
-  DashboardBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub medislot-${Environment}-dashboard-r20261114-${AWS::AccountId}-${AWS::Region}
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
 
   DashboardSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -68,7 +60,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: s3:GetObject
-                Resource: !Sub "${DashboardBucket.Arn}/*"
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${DashboardBucketName}/*"
 
   DashboardInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -108,7 +100,7 @@ Resources:
           cat > /opt/medislot/deploy.sh <<'DEPLOY'
           #!/bin/bash
           set -eux
-          aws s3 cp s3://${DashboardBucket}/dashboard.tgz /tmp/dashboard.tgz
+          aws s3 cp s3://${DashboardBucketName}/dashboard.tgz /tmp/dashboard.tgz
           tar -xzf /tmp/dashboard.tgz -C /opt/medislot
           [ -d /opt/medislot/venv ] || python3 -m venv /opt/medislot/venv
           /opt/medislot/venv/bin/pip install -r /opt/medislot/requirements.txt
@@ -145,4 +137,4 @@ Outputs:
   DashboardInstanceId:
     Value: !Ref DashboardInstance
   BucketName:
-    Value: !Ref DashboardBucket
+    Value: !Ref DashboardBucketName

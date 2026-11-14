@@ -430,14 +430,15 @@ jobs:
 
           FLASK_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
 
+          BUCKET="medislot-${ENVIRONMENT}-dashboard-r20261114-${ACCOUNT}-${AWS_REGION}"
+
           python scripts/deploy_stack.py \
             cloudformation/dashboard-stack.yaml \
             "medislot-${ENVIRONMENT}-dashboard" \
             "Environment=${ENVIRONMENT}" \
             "ApiBaseUrl=${API_URL}" \
-            "FlaskSecret=${FLASK_SECRET}"
-
-          BUCKET="medislot-${ENVIRONMENT}-dashboard-r20261114-${ACCOUNT}-${AWS_REGION}"
+            "FlaskSecret=${FLASK_SECRET}" \
+            "DashboardBucketName=${BUCKET}"
 
           aws s3 cp dashboard.tgz \
             "s3://${BUCKET}/dashboard.tgz" \
