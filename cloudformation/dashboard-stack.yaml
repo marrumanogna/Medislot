@@ -30,7 +30,7 @@ Resources:
   DashboardBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub medislot-${Environment}-dashboard-${AWS::AccountId}-${AWS::Region}
+      BucketName: !Sub medislot-${Environment}-dashboard-r20261114-${AWS::AccountId}-${AWS::Region}
       VersioningConfiguration:
         Status: Enabled
       PublicAccessBlockConfiguration:

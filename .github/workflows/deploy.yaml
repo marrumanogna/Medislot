@@ -437,7 +437,7 @@ jobs:
             "ApiBaseUrl=${API_URL}" \
             "FlaskSecret=${FLASK_SECRET}"
 
-          BUCKET="medislot-${ENVIRONMENT}-dashboard-${ACCOUNT}-${AWS_REGION}"
+          BUCKET="medislot-${ENVIRONMENT}-dashboard-r20261114-${ACCOUNT}-${AWS_REGION}"
 
           aws s3 cp dashboard.tgz \
             "s3://${BUCKET}/dashboard.tgz" \
