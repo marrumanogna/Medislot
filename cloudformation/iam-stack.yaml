@@ -262,6 +262,23 @@ Resources:
               StringEquals:
                 ec2:ResourceTag/Project: MediSlot
                 ec2:ResourceTag/Name: !Sub medislot-${Environment}-dashboard
+          - Sid: DescribeResourcesForDashboardUpdate
+            Effect: Allow
+            Action:
+              - ec2:DescribeVolumes
+              - ec2:DescribeNetworkAcls
+            Resource: "*"
+
+          - Sid: ModifyDashboardInstanceAttributes
+            Effect: Allow
+            Action:
+              - ec2:ModifyInstanceAttribute
+            Resource:
+              - !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/Project: MediSlot
+                ec2:ResourceTag/Name: !Sub medislot-${Environment}-dashboard
           - Sid: ManageMediSlotS3Buckets
             Effect: Allow
             Action:
