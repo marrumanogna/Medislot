@@ -152,4 +152,5 @@
   });
 
   window.MS = { api, toast, esc, $, $$, initials, errorMessage, hhmm, time12, money, DAYS, isoDateIn, addDays, prettyDate, withBusy, tagInput, fillTimezones, confirmDialog };
+  window.MS_VERSION = "2026-11-14-a"; // marker: proves the new file is the one being served
 })();

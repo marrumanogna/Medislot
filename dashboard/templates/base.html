@@ -17,7 +17,7 @@
 
   <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-  {% set asset_version = config.get('ASSET_VERSION', '20261113') %}
+  {% set asset_version = config.get('ASSET_VERSION', '20261114') %}
 
   <link
     rel="stylesheet"
@@ -34,7 +34,6 @@
 
   <script
     src="{{ url_for('static', filename='js/core.js', v=asset_version) }}"
-    defer
   ></script>
 
   {% block scripts %}{% endblock %}
