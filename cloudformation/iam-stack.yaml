@@ -251,7 +251,17 @@ Resources:
             Condition:
               StringEquals:
                 aws:RequestedRegion: !Ref AWS::Region
-
+          - Sid: ManageMediSlotDashboardInstanceState
+            Effect: Allow
+            Action:
+              - ec2:StopInstances
+              - ec2:StartInstances
+            Resource:
+              - !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+            Condition:
+              StringEquals:
+                ec2:ResourceTag/Project: MediSlot
+                ec2:ResourceTag/Name: !Sub medislot-${Environment}-dashboard
           - Sid: ManageMediSlotS3Buckets
             Effect: Allow
             Action:
