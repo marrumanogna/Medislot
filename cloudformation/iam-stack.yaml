@@ -100,6 +100,22 @@ Resources:
               - iam:ListAttachedRolePolicies
             Resource:
               - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/MediSlot-${Environment}-*Role
+          - Sid: ManageMediSlotDashboardRole
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/medislot-${Environment}-dashboard-*
 
           - Sid: AttachMediSlotLambdaBasePolicy
             Effect: Allow
@@ -111,6 +127,16 @@ Resources:
             Condition:
               ArnEquals:
                 iam:PolicyARN: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/MediSlot-${Environment}-LambdaBasePolicy
+          - Sid: AttachDashboardSsmPolicy
+            Effect: Allow
+            Action:
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/medislot-${Environment}-dashboard-*
+            Condition:
+              ArnEquals:
+                iam:PolicyARN: !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
 
           - Sid: PassMediSlotAuthRolesToLambda
             Effect: Allow
@@ -126,10 +152,22 @@ Resources:
             Action:
               - iam:PassRole
             Resource:
-              - arn:aws:iam::195710498029:role/instanceRole
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/medislot-${Environment}-dashboard-*
             Condition:
               StringEquals:
                 iam:PassedToService: ec2.amazonaws.com
+          - Sid: ManageDashboardInstanceProfiles
+            Effect: Allow
+            Action:
+              - iam:CreateInstanceProfile
+              - iam:DeleteInstanceProfile
+              - iam:GetInstanceProfile
+              - iam:AddRoleToInstanceProfile
+              - iam:RemoveRoleFromInstanceProfile
+              - iam:TagInstanceProfile
+              - iam:UntagInstanceProfile
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/medislot-${Environment}-dashboard-*
           - Sid: ManageMediSlotLambdaFunctions
             Effect: Allow
             Action:
