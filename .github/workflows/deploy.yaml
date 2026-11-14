@@ -522,3 +522,5 @@ jobs:
 
           pytest tests/integration -q -rs
 # Re-trigger Milestone 5 deployment after Gitleaks false-positive exclusion
+
+# Trigger deployment after database recovery - 14 Nov 2026
