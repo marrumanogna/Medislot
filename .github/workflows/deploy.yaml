@@ -10,6 +10,7 @@ on:
       - feature/milestone-2
       - feature/milestone-4
       - feature/milestone-5
+      - feature/m6-reschedule-waitlist-notifications
     paths:
       - "cloudformation/**"
       - "lambdas/**"
@@ -93,7 +94,7 @@ jobs:
   deploy:
     name: deploy
     needs: ci
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/milestone-5') &&       github.event_name != 'pull_request'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/milestone-5' || github.ref == 'refs/heads/feature/m6-reschedule-waitlist-notifications') && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
