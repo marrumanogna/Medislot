@@ -375,6 +375,7 @@ CREATE TABLE IF NOT EXISTS appointments (
     booked_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
     cancelled_at TIMESTAMP NULL,
     cancel_reason VARCHAR(255) NULL,
+    reschedule_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (appointment_id),
     UNIQUE KEY uq_appt_patient_active_slot (patient_id, active_slot_id),
     UNIQUE KEY uq_appt_patient_idem (patient_id, idempotency_key),

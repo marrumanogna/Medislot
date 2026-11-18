@@ -50,6 +50,7 @@ DEFAULT_REFUND = {
     "t1_percent": 100, "t2_percent": 75, "t3_percent": 50, "t4_percent": 0,
 }
 DEFAULT_LIMITS = {"max_upcoming_per_doctor": 3}
+DEFAULT_RESCHEDULE = {"max-count": 2, "cutoff-hours": 6}
 
 
 class ApiError(Exception):
@@ -121,6 +122,10 @@ def ssm_int(name, default):
         value = default
     _ssm_cache[name] = (time.time(), value)
     return value
+
+
+def reschedule_config():
+    return {k: ssm_int("reschedule/" + k, d) for k, d in DEFAULT_RESCHEDULE.items()}
 
 
 def refund_config():
@@ -246,6 +251,7 @@ class SlotStore:
                     "start_at": start,
                     "capacity": int(slot["capacity"]),
                     "booked_count": 0,
+                    "held_count": 0,
                     "version": 0,
                     "status": "OPEN",
                 },
@@ -353,7 +359,7 @@ class IdempotencyStore:
 
 APPT_SELECT = (
     "SELECT a.appointment_id, a.slot_id, a.doctor_id, a.patient_id, a.consultation_type_id, "
-    "a.slot_start, a.slot_end, a.fee, a.status, a.booked_at, a.cancelled_at, a.cancel_reason, "
+    "a.slot_start, a.slot_end, a.fee, a.status, a.reschedule_count, a.booked_at, a.cancelled_at, a.cancel_reason, "
     "c.name AS consultation_type, dp.full_name AS doctor_name, pt.full_name AS patient_name, "
     "r.amount AS refund_amount, r.refund_percent, r.tier AS refund_tier "
     "FROM appointments a "
@@ -479,6 +485,18 @@ class Repo:
         self.cur.execute(APPT_SELECT + "WHERE a.slot_id = %s AND a.status = 'CONFIRMED' FOR UPDATE", (slot_id,))
         return self.cur.fetchall()
 
+    def move_appointment(self, appointment_id, frm, to, count_delta):
+        """Single-row move: the patient holds exactly one appointment at every instant.
+        Guarded by status and the current slot, so it is safe to call twice."""
+        self.cur.execute(
+            "UPDATE appointments SET slot_id = %s, doctor_id = %s, consultation_type_id = %s, "
+            "slot_start = %s, slot_end = %s, active_slot_id = %s, reschedule_count = reschedule_count + %s "
+            "WHERE appointment_id = %s AND status = 'CONFIRMED' AND slot_id = %s",
+            (to["slot_id"], to["doctor_id"], to["consultation_type_id"], to["slot_start"], to["slot_end"],
+             to["slot_id"], count_delta, appointment_id, frm["slot_id"]),
+        )
+        return self.cur.rowcount == 1
+
     def refunds(self, patient_id):
         self.cur.execute(
             "SELECT r.refund_id, r.appointment_id, r.fee, r.amount, r.refund_percent, r.tier, r.reason, "
@@ -506,6 +524,7 @@ def appointment_view(a, role="PATIENT"):
         "slot_end": to_ist(a["slot_end"]),
         "fee": money(a["fee"]),
         "status": a["status"],
+        "reschedules_used": int(a.get("reschedule_count") or 0),
         "cancel_reason": a.get("cancel_reason"),
         "refund": None,
     }
@@ -706,6 +725,142 @@ class Engine:
         return 200, {"slot_id": int(slot_id), "cancelled_appointments": len(affected), "refund_percent": 100}
 
 
+def _slot_dict(slot):
+    """JSON-safe copy of a slot row for Step Functions payloads."""
+    return {
+        "slot_id": int(slot["slot_id"]), "doctor_id": int(slot["doctor_id"]),
+        "consultation_type_id": int(slot["consultation_type_id"]),
+        "slot_start": slot["slot_start"].isoformat(), "slot_end": slot["slot_end"].isoformat(),
+        "capacity": int(slot["capacity"]),
+    }
+
+
+def _slot_obj(d):
+    return {**d, "slot_start": datetime.fromisoformat(d["slot_start"]), "slot_end": datetime.fromisoformat(d["slot_end"])}
+
+
+class RescheduleTasks:
+    """Task handlers invoked by the Step Functions saga (see docs/m6-design-note.md).
+
+    claim -> commit (RDS row moves; patient now holds target) -> release original seat -> finalize.
+    If commit or release fails after the claim, `compensate` moves the row back and frees the target
+    seat. The appointment is ONE row, so the patient holds exactly one appointment throughout."""
+
+    def __init__(self, engine):
+        self.e = engine
+
+    def claim(self, repo, inp):
+        try:
+            pid = repo.patient_id(int(inp["user_id"]))
+            appt = repo.get_appointment(int(inp["appointment_id"]), patient_id=pid, for_update=True) if pid else None
+            if not appt:
+                raise ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found.")
+            if appt["status"] != "CONFIRMED":
+                raise ApiError(409, "NOT_RESCHEDULABLE", "Only confirmed appointments can be rescheduled.")
+            cfg, now = reschedule_config(), self.e.clock()
+            if int(appt.get("reschedule_count") or 0) >= cfg["max-count"]:
+                raise ApiError(422, "RESCHEDULE_LIMIT", f"An appointment can be rescheduled at most {cfg['max-count']} times.")
+            if (appt["slot_start"] - now).total_seconds() < cfg["cutoff-hours"] * 3600:
+                raise ApiError(422, "RESCHEDULE_TOO_CLOSE", f"Rescheduling is not permitted within {cfg['cutoff-hours']} hours of the start.")
+            target_id = int(inp["target_slot_id"])
+            if target_id == int(appt["slot_id"]):
+                raise ApiError(400, "SAME_SLOT", "Choose a different slot.")
+            target = repo.get_slot(target_id)
+            if not target:
+                raise ApiError(404, "SLOT_NOT_FOUND", "Target slot not found.")
+            if target["slot_start"] <= now:
+                raise ApiError(422, "SLOT_IN_PAST", "The target slot has already started.")
+            if target["status"] not in ("AVAILABLE", "BOOKED"):
+                raise ApiError(409, "SLOT_UNAVAILABLE", "The target slot is not open for booking.")
+            others = [u for u in repo.upcoming(pid, now) if int(u["slot_id"]) != int(appt["slot_id"])]
+            enforce_limits(others, target, limit_config())
+            original = repo.get_slot(int(appt["slot_id"]))
+            self.e.reserve_seat(target)  # OCC conditional write; 409 SLOT_FULL when full
+            return {"ok": True, "appointment_id": int(appt["appointment_id"]), "patient_id": pid,
+                    "doctor_id": int(appt["doctor_id"]),
+                    "original": _slot_dict(original), "target": _slot_dict(target),
+                    "from_start": appt["slot_start"].isoformat()}
+        except ApiError as exc:
+            repo.rollback()
+            return {"ok": False, "status": exc.status, "code": exc.code, "message": exc.message}
+
+    def commit(self, repo, inp):
+        c = inp["claim"]["value"]
+        ok = repo.move_appointment(c["appointment_id"], _slot_obj(c["original"]), _slot_obj(c["target"]), 1)
+        if not ok:
+            repo.rollback()
+            raise RuntimeError("Appointment no longer in its original slot")
+        item = self.e.slots.get(c["target"]["slot_id"])
+        if item and item["booked_count"] >= item["capacity"]:
+            repo.set_slot_status(c["target"]["slot_id"], "BOOKED", "AVAILABLE")
+        repo.commit()
+        return {"ok": True}
+
+    def release_original(self, repo, inp):
+        if inp.get("fail_release"):
+            raise RuntimeError("Injected failure while releasing the original seat")
+        c = inp["claim"]["value"]
+        repo.set_slot_status(c["original"]["slot_id"], "AVAILABLE", "BOOKED")  # idempotent
+        repo.commit()
+        # The seat decrement is the LAST side effect, so a retry can never double-release.
+        if self.e.release_seat(c["original"]["slot_id"]) is None:
+            raise RuntimeError("Could not release the original seat")
+        return {"ok": True}
+
+    def compensate(self, repo, inp):
+        c = inp["claim"]["value"]
+        reverted = repo.move_appointment(c["appointment_id"], _slot_obj(c["target"]), _slot_obj(c["original"]), -1)
+        repo.commit()
+        self.e.release_seat(c["target"]["slot_id"])
+        self.e.metrics.count("ReschedulesCompensated", 1)
+        return {"ok": True, "reverted": reverted}
+
+    def finalize(self, repo, inp):
+        c = inp["claim"]["value"]
+        self.e.metrics.count("ReschedulesSucceeded", 1)
+        self.e.events.publish("AppointmentRescheduled", {
+            "appointment_id": c["appointment_id"], "patient_id": c["patient_id"],
+            "doctor_id": c["target"]["doctor_id"], "old_slot_id": c["original"]["slot_id"],
+            "new_slot_id": c["target"]["slot_id"], "old_start": c["original"]["slot_start"] + "Z",
+            "slot_start": c["target"]["slot_start"] + "Z",
+        })
+        item = self.e.slots.get(c["original"]["slot_id"])
+        if item:
+            self.e.events.publish("SlotSeatFreed", {
+                "slot_id": c["original"]["slot_id"], "doctor_id": c["original"]["doctor_id"],
+                "seats_free": int(item["capacity"]) - int(item["booked_count"]), "capacity": int(item["capacity"]),
+            })
+        return {"ok": True}
+
+    def run(self, repo, action, inp):
+        return getattr(self, action)(repo, inp)
+
+
+def start_reschedule(engine, user_id, appointment_id, target_slot_id, cid, fail_release=False,
+                     sfn=None, wait_seconds=24):
+    """PATCH handler: start the saga and wait for its outcome (it normally takes ~1-3 s)."""
+    import uuid
+    if sfn is None:
+        import boto3
+        sfn = boto3.client("stepfunctions")
+    arn = os.environ["RESCHEDULE_STATE_MACHINE_ARN"]
+    ex = sfn.start_execution(
+        stateMachineArn=arn, name=f"resched-{appointment_id}-{uuid.uuid4().hex}",
+        input=json.dumps({"user_id": user_id, "appointment_id": appointment_id,
+                          "target_slot_id": target_slot_id, "fail_release": bool(fail_release),
+                          "correlationId": cid}),
+    )["executionArn"]
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        d = sfn.describe_execution(executionArn=ex)
+        if d["status"] == "RUNNING":
+            time.sleep(0.4)
+            continue
+        out = json.loads(d.get("output") or "{}") if d["status"] == "SUCCEEDED" else {"status": "FAILED"}
+        return ex, out
+    return ex, {"status": "PENDING"}
+
+
 _engine = None
 
 
@@ -780,6 +935,29 @@ def route(event, repo, engine):
         need("PATIENT")
         return engine.cancel_by_patient(repo, user_id, _int(path.get("appointment_id"), "appointment_id"), payload.get("reason"))
 
+    if (method, resource) == ("PATCH", "/appointments/{appointment_id}"):
+        need("PATIENT")
+        aid = _int(path.get("appointment_id"), "appointment_id")
+        target = _int(payload.get("slot_id"), "slot_id")
+        fail = (str(_header(event, "X-Medislot-Fail-Release")).lower() == "true"
+                and ssm_int("testing/allow-fault-injection", 0) == 1)
+        ex, out = start_reschedule(engine, user_id, aid, target, engine.events.cid, fail)
+        status = out.get("status")
+        if status == "RESCHEDULED":
+            pid = repo.patient_id(user_id)
+            return 200, {"appointment": appointment_view(repo.get_appointment(aid, patient_id=pid)), "executionArn": ex}
+        if status == "REJECTED":
+            r = out.get("reason", {})
+            raise ApiError(r.get("status", 409), r.get("code", "RESCHEDULE_REJECTED"), r.get("message", "Reschedule rejected."))
+        if status == "COMPENSATED":
+            pid = repo.patient_id(user_id)
+            return 409, {"code": "RESCHEDULE_COMPENSATED",
+                         "message": "The reschedule failed and was rolled back; your original appointment is unchanged.",
+                         "appointment": appointment_view(repo.get_appointment(aid, patient_id=pid)), "executionArn": ex}
+        if status == "PENDING":
+            return 202, {"code": "RESCHEDULE_PENDING", "message": "Reschedule is still running.", "executionArn": ex}
+        raise ApiError(500, "RESCHEDULE_FAILED", "Reschedule failed.")
+
     if (method, resource) == ("GET", "/patient/refunds"):
         need("PATIENT")
         pid = repo.patient_id(user_id)
@@ -802,6 +980,15 @@ def route(event, repo, engine):
 
 
 def handler(event, context):
+    if isinstance(event, dict) and event.get("task"):  # Step Functions saga task
+        conn = dbconn(config())
+        try:
+            repo = Repo(conn)
+            engine = get_engine()
+            engine.events.cid = event.get("correlationId")
+            return RescheduleTasks(engine).run(repo, event["task"], event)
+        finally:
+            conn.close()
     cid = correlation(event)
     conn = None
     try:
