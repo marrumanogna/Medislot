@@ -235,3 +235,16 @@ def test_waitlists_for_started_slots_do_not_count_toward_cap():
     eng, repo, seats, lst, off, clock = build(patients=(11,))
     clock["now"] = START + timedelta(hours=1)          # slot 1 has started
     assert eng.listing(repo, 11)[1]["items"] == []
+
+
+def test_seat_updates_only_pass_expression_attribute_names_they_use():
+    """DynamoDB raises ValidationException for unused ExpressionAttributeNames (caused a 500 on accept)."""
+    from unittest.mock import MagicMock
+    seats = wl.Seats()
+    seats._t = MagicMock()
+    seats._t.update_item.return_value = {"Attributes": {"slot_id": "1"}}
+    for op in (seats.hold, seats.convert, seats.free_hold):
+        op(1)
+        kw = seats._t.update_item.call_args.kwargs
+        text = kw["UpdateExpression"] + " " + kw["ConditionExpression"]
+        assert all(name in text for name in kw.get("ExpressionAttributeNames", {}))
