@@ -247,4 +247,5 @@ def test_seat_updates_only_pass_expression_attribute_names_they_use():
         op(1)
         kw = seats._t.update_item.call_args.kwargs
         text = kw["UpdateExpression"] + " " + kw["ConditionExpression"]
-        assert all(name in text for name in kw.get("ExpressionAttributeNames", {}))
+        names = kw.get("ExpressionAttributeNames")
+        assert names is None or (names and all(name in text for name in names))   # never empty, never unused

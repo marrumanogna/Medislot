@@ -118,13 +118,13 @@ class Seats:
         return _plain(self.t.get_item(Key={"slot_id": str(slot_id)}, ConsistentRead=True).get("Item"))
 
     def _update(self, slot_id, expr, cond, values):
+        # DynamoDB rejects unused names AND an empty names map, so pass only the used ones, if any.
+        names = {k: v for k, v in {"#s": "status", "#cap": "capacity"}.items() if k in expr or k in cond}
+        kwargs = {"ExpressionAttributeNames": names} if names else {}
         try:
             out = self.t.update_item(
                 Key={"slot_id": str(slot_id)}, UpdateExpression=expr, ConditionExpression=cond,
-                # DynamoDB rejects names that the expressions do not use, so pass only the used ones
-                ExpressionAttributeNames={k: v for k, v in {"#s": "status", "#cap": "capacity"}.items()
-                                          if k in expr or k in cond},
-                ExpressionAttributeValues=values, ReturnValues="ALL_NEW")
+                ExpressionAttributeValues=values, ReturnValues="ALL_NEW", **kwargs)
             return _plain(out["Attributes"])
         except Exception as exc:
             if _failed(exc):
