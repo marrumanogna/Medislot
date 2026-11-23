@@ -53,6 +53,17 @@ DEFAULT_LIMITS = {"max_upcoming_per_doctor": 3}
 DEFAULT_RESCHEDULE = {"max-count": 2, "cutoff-hours": 6}
 
 
+_ctx = {"cid": None, "started": None}
+
+
+def log_event(name, **fields):
+    """One structured JSON log line per step. Never raises, never logs secrets or request bodies."""
+    try:
+        logger.info(json.dumps({"event": name, "env": ENV, "cid": _ctx["cid"], **fields}, default=str))
+    except Exception:  # logging must never break a request
+        pass
+
+
 class ApiError(Exception):
     def __init__(self, status, code, message):
         super().__init__(message)
@@ -203,6 +214,9 @@ class Events:
             }])
             if out.get("FailedEntryCount"):
                 logger.error("EventBridge rejected %s: %s", detail_type, out.get("Entries"))
+            else:
+                log_event("event_published", detail_type=detail_type, slot_id=detail.get("slot_id"),
+                          appointment_id=detail.get("appointment_id"), patient_id=detail.get("patient_id"))
         except Exception:
             # The booking is already committed in RDS; never fail the caller.
             logger.exception("Could not publish %s", detail_type)
@@ -334,11 +348,13 @@ class IdempotencyStore:
                 ExpressionAttributeNames={"#st": "state"},
                 ExpressionAttributeValues={":ip": "IN_PROGRESS", ":stale": now - IN_PROGRESS_STALE},
             )
+            log_event("idempotency_key_claimed", key=key)
             return None
         except Exception as exc:
             if not _conditional_failed(exc):
                 raise
         item = self.t.get_item(Key={"idempotency_key": key}, ConsistentRead=True).get("Item")
+        log_event("idempotency_key_exists", key=key, state=(item or {}).get("state"))
         return _plain(item) if item else self.begin(key, request_hash)
 
     def complete(self, key, result):
@@ -558,21 +574,32 @@ class Engine:
         sid = slot["slot_id"]
         if self.slots.get(sid) is None:
             self.slots.create(slot)
+            log_event("slot_record_created", slot_id=sid, capacity=int(slot["capacity"]))
         attempts = max(MIN_ATTEMPTS, int(slot["capacity"]) + 2)
         retries = 0
         try:
             for attempt in range(attempts):
                 item = self.slots.get(sid)
+                log_event("seat_attempt", slot_id=sid, attempt=attempt + 1, max_attempts=attempts,
+                          seen_version=item["version"], booked=item["booked_count"],
+                          held=item.get("held_count", 0), capacity=item["capacity"], status=item["status"])
                 if item["status"] != "OPEN":
+                    log_event("seat_rejected_unavailable", slot_id=sid, status=item["status"])
                     raise ApiError(409, "SLOT_UNAVAILABLE", "This slot is no longer available.")
                 if item["booked_count"] >= item["capacity"]:
+                    log_event("seat_rejected_full", slot_id=sid, booked=item["booked_count"], capacity=item["capacity"])
                     self.metrics.count("BookingsRejectedFull", 1)
                     raise ApiError(409, "SLOT_FULL", "This slot is full.")
                 try:
-                    return self.slots.reserve(sid, item["version"]), retries
+                    got = self.slots.reserve(sid, item["version"]), retries
+                    log_event("seat_reserved", slot_id=sid, new_version=got[0]["version"],
+                              booked=got[0]["booked_count"], capacity=got[0]["capacity"], conflict_retries=retries)
+                    return got
                 except VersionConflict:
                     retries += 1
+                    log_event("seat_version_conflict", slot_id=sid, attempt=attempt + 1, retries_so_far=retries)
                     self._backoff(attempt)
+            log_event("seat_busy_gave_up", slot_id=sid, attempts=attempts)
             raise ApiError(409, "SLOT_BUSY", "Too many people are booking this slot right now. Please try again.")
         finally:
             if retries:
@@ -583,10 +610,16 @@ class Engine:
         for attempt in range(8):
             item = self.slots.get(slot_id)
             if not item or item.get("status") != "OPEN" or item["booked_count"] <= 0:
+                log_event("seat_release_skipped", slot_id=slot_id, status=(item or {}).get("status"),
+                          booked=(item or {}).get("booked_count"))
                 return item
             try:
-                return self.slots.release(slot_id, item["version"])
+                freed = self.slots.release(slot_id, item["version"])
+                log_event("seat_released", slot_id=slot_id, attempt=attempt + 1, booked=freed["booked_count"],
+                          capacity=freed["capacity"], new_version=freed["version"])
+                return freed
             except VersionConflict:
+                log_event("seat_release_conflict", slot_id=slot_id, attempt=attempt + 1)
                 self._backoff(attempt)
         self.metrics.count("SeatReleaseFailures", 1)
         logger.error("Could not release seat for slot %s", slot_id)
@@ -595,29 +628,37 @@ class Engine:
     # -- booking ------------------------------------------------------------ #
     def book(self, repo, user_id, slot_id, client_key, request_hash):
         patient_id = repo.patient_id(user_id)
+        log_event("book_start", user_id=user_id, patient_id=patient_id, slot_id=slot_id, idempotency_key=client_key)
         if patient_id is None:
             raise ApiError(409, "PROFILE_REQUIRED", "Complete your patient profile before booking.")
 
-        key = f"{user_id}:{client_key}"
+        key = f"{user_id}:{client_key}"       #stores this key in dynamodb
         existing = self.idem.begin(key, request_hash)
         if existing is not None:
             if existing.get("request_hash") != request_hash:
                 raise ApiError(422, "IDEMPOTENCY_KEY_REUSED", "This Idempotency-Key was used with a different request.")
             if existing.get("state") == "COMPLETED":
                 result = json.loads(existing["result"])
+                log_event("book_idempotent_replay", slot_id=slot_id, source="dynamodb")
                 return 200, {**result, "idempotent_replay": True}
+            log_event("book_request_in_progress", slot_id=slot_id)
             raise ApiError(409, "REQUEST_IN_PROGRESS", "The original request is still being processed.")
 
         prior = repo.find_by_key(patient_id, client_key)
         if prior:  # RDS already holds this key (e.g. the idempotency record was lost)
             result = {"appointment": appointment_view(prior)}
             self.idem.complete(key, result)
+            log_event("book_idempotent_replay", slot_id=slot_id, source="rds",
+                      appointment_id=int(prior["appointment_id"]))
             return 200, {**result, "idempotent_replay": True}
 
         seat = None
         try:
             slot = repo.get_slot(slot_id)
             now = self.clock()
+            log_event("book_slot_loaded", slot_id=slot_id, found=bool(slot),
+                      slot_status=(slot or {}).get("status"), slot_start=(slot or {}).get("slot_start"),
+                      capacity=(slot or {}).get("capacity"), fee=(slot or {}).get("fee"))
             if not slot:
                 raise ApiError(404, "SLOT_NOT_FOUND", "Slot not found.")
             if slot["slot_start"] <= now:
@@ -628,15 +669,21 @@ class Engine:
                 raise ApiError(409, "TYPE_NOT_OFFERED", "The doctor no longer offers this consultation type.")
             enforce_limits(repo.upcoming(patient_id, now), slot, limit_config())
 
+            log_event("book_limits_ok", slot_id=slot_id, patient_id=patient_id)
             seat, _ = self.reserve_seat(slot)
             appt, created = repo.insert_appointment(patient_id, slot, client_key)
+            log_event("book_row_inserted", slot_id=slot_id, appointment_id=int(appt["appointment_id"]), created=created)
             if not created:  # RDS already had this key: give the seat back
                 self.release_seat(slot_id)
                 seat = None
             elif seat["booked_count"] >= seat["capacity"]:
                 repo.set_slot_status(slot_id, "BOOKED", "AVAILABLE")
+                log_event("book_slot_now_full", slot_id=slot_id)
             repo.commit()
-        except BaseException:
+            log_event("book_committed", slot_id=slot_id, appointment_id=int(appt["appointment_id"]))
+        except BaseException as exc:
+            log_event("book_failed_rolling_back", slot_id=slot_id, error_type=type(exc).__name__,
+                      error=str(exc)[:300], seat_held=seat is not None)
             try:
                 repo.rollback()
             except Exception:
@@ -648,6 +695,7 @@ class Engine:
 
         result = {"appointment": appointment_view(appt)}
         self.idem.complete(key, result)
+        log_event("book_done", slot_id=slot_id, appointment_id=int(appt["appointment_id"]), created=created)
         if created:
             self.metrics.count("AppointmentsBooked", 1)
             self.events.publish("AppointmentBooked", {
@@ -681,15 +729,21 @@ class Engine:
         if not appt:
             raise ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found.")
         if appt["status"] != "CONFIRMED":
+            log_event("cancel_already_cancelled", appointment_id=int(appointment_id), status=appt["status"])
             return 200, {"appointment": appointment_view(appt), "already_cancelled": True}
         now = self.clock()
         if appt["slot_start"] <= now:
             raise ApiError(409, "TOO_LATE", "This appointment has already started.")
-        tier, percent = refund_tier(appt["slot_start"], now, refund_config())
+        cfg = refund_config()
+        tier, percent = refund_tier(appt["slot_start"], now, cfg)
         amount = refund_amount(appt["fee"], percent)
+        log_event("cancel_refund_calculated", appointment_id=int(appt["appointment_id"]),
+                  hours_before=round((appt["slot_start"] - now).total_seconds() / 3600, 4),
+                  tier=tier, percent=percent, fee=money(appt["fee"]), refund=money(amount), windows=cfg)
         repo.cancel(appt, "CANCELLED_BY_PATIENT", reason or "Cancelled by patient", tier, percent, amount)
         repo.set_slot_status(int(appt["slot_id"]), "AVAILABLE", "BOOKED")
         repo.commit()
+        log_event("cancel_committed", appointment_id=int(appt["appointment_id"]), slot_id=int(appt["slot_id"]), tier=tier)
         self.metrics.count("CancellationsByTier", 1, Tier=tier)
         self.metrics.count("RefundAmountTotal", float(amount), unit="None")
         self._after_cancel(appt, "CANCELLED_BY_PATIENT", tier, percent, amount, reason or "Cancelled by patient")
@@ -705,11 +759,14 @@ class Engine:
             raise ApiError(409, "TOO_LATE", "This slot has already started.")
         text = reason or "Cancelled by doctor"
         affected = repo.booked_for_slot(slot_id)
+        log_event("doctor_slot_cancel_start", slot_id=int(slot_id), doctor_id=int(doctor_id),
+                  affected_appointments=len(affected), previous_status=slot["status"])
         for appt in affected:
             repo.cancel(appt, "CANCELLED_BY_DOCTOR", text, "DOCTOR_CANCELLED", 100, refund_amount(appt["fee"], 100))
         repo.set_slot_status(slot_id, "BLOCKED", slot["status"])
         repo.commit()
         self.slots.close(slot_id)  # in-flight reservations lose their conditional write
+        log_event("doctor_slot_cancel_committed", slot_id=int(slot_id), refunded=len(affected))
         if affected:
             self.metrics.count("CancellationsByTier", len(affected), Tier="DOCTOR_CANCELLED")
             self.metrics.count("RefundAmountTotal", float(sum(refund_amount(a["fee"], 100) for a in affected)), unit="None")
@@ -750,6 +807,7 @@ class RescheduleTasks:
         self.e = engine
 
     def claim(self, repo, inp):
+        log_event("reschedule_claim_start", appointment_id=inp.get("appointment_id"), target_slot_id=inp.get("target_slot_id"))
         try:
             pid = repo.patient_id(int(inp["user_id"]))
             appt = repo.get_appointment(int(inp["appointment_id"]), patient_id=pid, for_update=True) if pid else None
@@ -776,16 +834,21 @@ class RescheduleTasks:
             enforce_limits(others, target, limit_config())
             original = repo.get_slot(int(appt["slot_id"]))
             self.e.reserve_seat(target)  # OCC conditional write; 409 SLOT_FULL when full
+            log_event("reschedule_claim_ok", appointment_id=int(appt["appointment_id"]),
+                      from_slot=int(appt["slot_id"]), to_slot=target_id, reschedules_used=int(appt.get("reschedule_count") or 0))
             return {"ok": True, "appointment_id": int(appt["appointment_id"]), "patient_id": pid,
                     "doctor_id": int(appt["doctor_id"]),
                     "original": _slot_dict(original), "target": _slot_dict(target),
                     "from_start": appt["slot_start"].isoformat()}
         except ApiError as exc:
             repo.rollback()
+            log_event("reschedule_claim_rejected", appointment_id=inp.get("appointment_id"), code=exc.code, status=exc.status)
             return {"ok": False, "status": exc.status, "code": exc.code, "message": exc.message}
 
     def commit(self, repo, inp):
         c = inp["claim"]["value"]
+        log_event("reschedule_commit_start", appointment_id=c["appointment_id"],
+                  from_slot=c["original"]["slot_id"], to_slot=c["target"]["slot_id"])
         ok = repo.move_appointment(c["appointment_id"], _slot_obj(c["original"]), _slot_obj(c["target"]), 1)
         if not ok:
             repo.rollback()
@@ -794,29 +857,38 @@ class RescheduleTasks:
         if item and item["booked_count"] >= item["capacity"]:
             repo.set_slot_status(c["target"]["slot_id"], "BOOKED", "AVAILABLE")
         repo.commit()
+        log_event("reschedule_commit_done", appointment_id=c["appointment_id"], now_in_slot=c["target"]["slot_id"])
         return {"ok": True}
 
     def release_original(self, repo, inp):
+        c = inp["claim"]["value"]
+        log_event("reschedule_release_start", appointment_id=c["appointment_id"], original_slot=c["original"]["slot_id"],
+                  fault_injected=bool(inp.get("fail_release")))
         if inp.get("fail_release"):
             raise RuntimeError("Injected failure while releasing the original seat")
-        c = inp["claim"]["value"]
         repo.set_slot_status(c["original"]["slot_id"], "AVAILABLE", "BOOKED")  # idempotent
         repo.commit()
         # The seat decrement is the LAST side effect, so a retry can never double-release.
         if self.e.release_seat(c["original"]["slot_id"]) is None:
             raise RuntimeError("Could not release the original seat")
+        log_event("reschedule_release_done", appointment_id=c["appointment_id"], original_slot=c["original"]["slot_id"])
         return {"ok": True}
 
     def compensate(self, repo, inp):
         c = inp["claim"]["value"]
+        log_event("reschedule_compensate_start", appointment_id=c["appointment_id"],
+                  revert_to_slot=c["original"]["slot_id"], free_slot=c["target"]["slot_id"])
         reverted = repo.move_appointment(c["appointment_id"], _slot_obj(c["target"]), _slot_obj(c["original"]), -1)
         repo.commit()
         self.e.release_seat(c["target"]["slot_id"])
         self.e.metrics.count("ReschedulesCompensated", 1)
+        log_event("reschedule_compensate_done", appointment_id=c["appointment_id"], row_moved_back=reverted)
         return {"ok": True, "reverted": reverted}
 
     def finalize(self, repo, inp):
         c = inp["claim"]["value"]
+        log_event("reschedule_finalize", appointment_id=c["appointment_id"], old_slot=c["original"]["slot_id"],
+                  new_slot=c["target"]["slot_id"])
         self.e.metrics.count("ReschedulesSucceeded", 1)
         self.e.events.publish("AppointmentRescheduled", {
             "appointment_id": c["appointment_id"], "patient_id": c["patient_id"],
@@ -850,14 +922,20 @@ def start_reschedule(engine, user_id, appointment_id, target_slot_id, cid, fail_
                           "target_slot_id": target_slot_id, "fail_release": bool(fail_release),
                           "correlationId": cid}),
     )["executionArn"]
-    deadline = time.time() + wait_seconds
+    log_event("reschedule_execution_started", execution_arn=ex, appointment_id=appointment_id,
+              target_slot_id=target_slot_id, fault_injection=bool(fail_release))
+    t0 = time.time()
+    deadline = t0 + wait_seconds
     while time.time() < deadline:
         d = sfn.describe_execution(executionArn=ex)
         if d["status"] == "RUNNING":
             time.sleep(0.4)
             continue
         out = json.loads(d.get("output") or "{}") if d["status"] == "SUCCEEDED" else {"status": "FAILED"}
+        log_event("reschedule_execution_finished", execution_arn=ex, sfn_status=d["status"],
+                  outcome=out.get("status"), waited_ms=int((time.time() - t0) * 1000))
         return ex, out
+    log_event("reschedule_execution_pending", execution_arn=ex, waited_ms=int((time.time() - t0) * 1000))
     return ex, {"status": "PENDING"}
 
 
@@ -898,8 +976,11 @@ def route(event, repo, engine):
     if payload is None:
         raise ApiError(400, "BAD_JSON", "Request body must be valid JSON.")
 
+    log_event("route", method=method, resource=resource, role=role, user_id=user_id, path_params=path)
+
     def need(expected):
         if role != expected:
+            log_event("role_denied", needed=expected, actual=role, resource=resource)
             raise ApiError(403, "WRONG_ROLE", f"This area is for {expected.lower()}s.")
 
     if (method, resource) == ("POST", "/appointments"):
@@ -981,23 +1062,40 @@ def route(event, repo, engine):
 
 def handler(event, context):
     if isinstance(event, dict) and event.get("task"):  # Step Functions saga task
+        _ctx["cid"] = event.get("correlationId")
+        t0 = time.time()
+        log_event("saga_task_start", task=event["task"], appointment_id=event.get("appointment_id"))
         conn = dbconn(config())
         try:
             repo = Repo(conn)
             engine = get_engine()
             engine.events.cid = event.get("correlationId")
-            return RescheduleTasks(engine).run(repo, event["task"], event)
+            result = RescheduleTasks(engine).run(repo, event["task"], event)
+            log_event("saga_task_end", task=event["task"], duration_ms=int((time.time() - t0) * 1000), result=result)
+            return result
+        except Exception as exc:
+            logger.exception("Saga task %s failed (%s)", event.get("task"), event.get("correlationId"))
+            log_event("saga_task_failed", task=event.get("task"), error_type=type(exc).__name__, error=str(exc)[:300])
+            raise
         finally:
             conn.close()
     cid = correlation(event)
+    _ctx["cid"] = cid
+    started = time.time()
+    log_event("request_start", method=event.get("httpMethod"), resource=event.get("resource"),
+              has_idempotency_key=bool(_header(event, "Idempotency-Key")),
+              request_id=(event.get("requestContext") or {}).get("requestId"))
     conn = None
     try:
         conn = dbconn(config())
         engine = get_engine()
         engine.events.cid = cid
         status, result = route(event, Repo(conn), engine)
+        log_event("request_end", status=status, duration_ms=int((time.time() - started) * 1000))
         return response(status, {**result, "correlationId": cid})
     except ApiError as exc:
+        log_event("request_rejected", status=exc.status, code=exc.code, message=exc.message,
+                  duration_ms=int((time.time() - started) * 1000))
         if conn is not None:
             try:
                 conn.rollback()
@@ -1006,6 +1104,7 @@ def handler(event, context):
         return response(exc.status, {"message": exc.message, "code": exc.code, "correlationId": cid})
     except Exception:
         logger.exception("Appointments request failed (%s)", cid)
+        log_event("request_failed", status=500, duration_ms=int((time.time() - started) * 1000))
         return response(500, {"message": "Appointment request failed", "correlationId": cid})
     finally:
         if conn is not None:
