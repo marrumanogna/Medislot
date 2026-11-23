@@ -229,6 +229,7 @@ PATIENT_PAGES = {
     "patient_home": ("/patient", "overview", "Overview"),
     "patient_doctors": ("/patient/doctors", "doctors", "Find a doctor"),
     "patient_appointments": ("/patient/appointments", "appointments", "My appointments"),
+    "patient_waitlists": ("/patient/waitlists", "waitlists", "My waitlists"),
     "patient_profile": ("/patient/profile", "profile", "My profile"),
 }
 

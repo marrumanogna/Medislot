@@ -232,8 +232,8 @@
         const d = data.days.find((x) => x.date === day);
         return `<div class="slot-day"><div class="slot-day-head"><strong>${esc(fmtDay(day))}</strong><span class="muted">${esc(d ? seatLabel(d.free_seats) : "")}</span></div>
           <div class="slot-pick" role="group" aria-label="Slots on ${esc(fmtDay(day))}">${byDay[day].map(([s, i]) =>
-            `<button type="button" data-s="${i}" aria-pressed="false" ${s.seats_free > 0 ? "" : "disabled"} title="${esc(s.consultation_type)} · ${esc(s.duration_minutes)} min · ${esc(money(s.fee))}">
-              <span>${esc(time12(s.slot_start.slice(11, 16)))}</span><small>${esc(seatLabel(s.seats_free))}</small></button>`).join("")}</div></div>`;
+            `<button type="button" data-s="${i}" aria-pressed="false" ${s.seats_free > 0 ? "" : 'data-full="1"'} title="${esc(s.consultation_type)} · ${esc(s.duration_minutes)} min · ${esc(money(s.fee))}">
+              <span>${esc(time12(s.slot_start.slice(11, 16)))}</span><small>${s.seats_free > 0 ? esc(seatLabel(s.seats_free)) : "Full · join waitlist"}</small></button>`).join("")}</div></div>`;
       }).join("");
     };
 
@@ -284,7 +284,9 @@
       body.querySelectorAll("[data-s]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
       const s = dlgState.chosen;
       $("#dd-pick").textContent = `Selected: ${fmtWhen(s.slot_start)} · ${s.consultation_type}`;
-      $("#dd-book").disabled = false; $("#dd-book").textContent = "Book this slot"; $("#dd-book").title = "";
+      const full = !(s.seats_free > 0);
+      $("#dd-book").disabled = false; $("#dd-book").textContent = full ? "Join waitlist" : "Book this slot"; $("#dd-book").title = "";
+      if (full) $("#dd-pick").textContent += " · Full: you will be offered the seat if one opens up";
     });
     body.addEventListener("change", (e) => {
       if (e.target.id !== "slot-from" || !e.target.value) return;
@@ -294,6 +296,13 @@
     });
     $("#dd-book").onclick = (e) => withBusy(e.currentTarget, async () => {
       const s = dlgState.chosen; if (!s) return;
+      if (!(s.seats_free > 0)) {
+        const w = await api("POST", `slots/${s.slot_id}/waitlist`);
+        if (w.ok) toast(`You're #${w.data.position} on the waitlist. See "My waitlists".`);
+        else toast(errorMessage(w, "Could not join the waitlist."), "error");
+        loadSlots();
+        return;
+      }
       // One key per click on this slot: retries of the same click replay the same appointment.
       dlgState.keys ||= {}; const key = (dlgState.keys[s.slot_id] ||= (crypto.randomUUID ? crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(16).slice(2)}`));
       const r = await api("POST", EP.appointments, { slot_id: s.slot_id, idempotency_key: key });
@@ -350,6 +359,56 @@
       if (res.ok) { form.reset(); mode(false); toast("Profile deleted."); }
       else toast(errorMessage(res), "error");
     });
+  };
+
+  /* ---------------------------------------------------------------- waitlists + hold offers (Milestone 6) */
+  pages.waitlists = async () => {
+    const host = $("#wl-list");
+    let items = [];
+    const left = (o) => Math.max(0, o.expires_at - Math.floor(Date.now() / 1000));
+    const mmss = (n) => `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
+    const draw = () => {
+      if (!items.length) {
+        host.innerHTML = `<div class="card">${empty(ICON_CAL, "No waitlists", "When a slot is full, open the doctor's slots and choose it to join the waitlist.")}</div>`;
+        return;
+      }
+      host.innerHTML = `<div class="pcards">${items.map((w, i) => {
+        const offer = w.offer;
+        const state = offer
+          ? `<span class="badge badge-green">A seat is held for you</span><div class="muted">Accept within <b data-timer="${i}">${mmss(left(offer))}</b></div>`
+          : `<span class="badge badge-blue">Waiting · position ${esc(w.position ?? "–")}</span>`;
+        const actions = offer
+          ? `<button class="btn btn-teal btn-sm" type="button" data-accept="${i}">Accept seat</button><button class="btn btn-ghost btn-sm" type="button" data-leave="${i}">Decline</button>`
+          : `<button class="btn btn-ghost btn-sm" type="button" data-leave="${i}">Leave waitlist</button>`;
+        return `<article class="pcard"><header><div><h3>${esc(w.doctor_name || "Doctor")}</h3><span class="muted">${esc(w.consultation_type || "")}</span></div></header>
+          <div class="meta"><span>${esc(fmtWhen(w.slot_start))}</span></div><div>${state}</div><footer>${actions}</footer></article>`;
+      }).join("")}</div>`;
+    };
+    const load = async () => {
+      const r = await api("GET", "patient/waitlists");
+      if (!r.ok) { host.innerHTML = problem(r); return; }
+      items = r.data.items || [];
+      draw();
+    };
+    host.addEventListener("click", async (e) => {
+      const a = e.target.closest("button[data-accept]"), l = e.target.closest("button[data-leave]");
+      const w = items[+((a || l)?.dataset.accept ?? (a || l)?.dataset.leave)];
+      if (!w) return;
+      if (a) {
+        await withBusy(a, async () => {
+          const r = await api("POST", `waitlist-offers/${w.offer.offer_id}/accept`);
+          toast(r.ok ? "Appointment booked from the waitlist." : errorMessage(r, "Could not accept this offer."), r.ok ? undefined : "error");
+        });
+      } else if (l) {
+        if (!(await MS.confirmDialog("Leave this waitlist?", w.offer ? "Your held seat will go to the next patient." : "You will lose your place in the queue.", "Leave"))) return;
+        const r = await api("DELETE", `slots/${w.slot_id}/waitlist`);
+        toast(r.ok ? "You left the waitlist." : errorMessage(r, "Could not leave the waitlist."), r.ok ? undefined : "error");
+      }
+      load();
+    });
+    setInterval(() => items.forEach((w, i) => { const t = host.querySelector(`[data-timer="${i}"]`); if (t && w.offer) t.textContent = mmss(left(w.offer)); }), 1000);
+    setInterval(load, 10000);   // offers appear and expire without a page refresh
+    load();
   };
 
   (pages[page] || (() => {}))();

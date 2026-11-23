@@ -13,6 +13,9 @@ Parameters:
     Description: Unique suffix generated for each new stack deployment
     Default: initial
 
+Conditions:
+  IsNotProd: !Not [!Equals [!Ref Environment, prod]]
+
 Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -355,6 +358,69 @@ Resources:
       Name: !Sub '/medislot/${Environment}/booking/max-upcoming-per-doctor'
       Type: String
       Value: '3'
+
+  WaitlistMaxPerPatientParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/waitlist/max-per-patient'
+      Type: String
+      Value: '5'
+
+  WaitlistHoldMinutesParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/waitlist/hold-minutes'
+      Type: String
+      Value: '15'
+
+  RescheduleMaxCountParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/reschedule/max-count'
+      Type: String
+      Value: '2'
+
+  RescheduleCutoffHoursParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/reschedule/cutoff-hours'
+      Type: String
+      Value: '6'
+
+  NoshowGraceMinutesParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/noshow/grace-minutes'
+      Type: String
+      Value: '30'
+
+  ReminderFirstHoursParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/reminder/first-hours'
+      Type: String
+      Value: '24'
+
+  ReminderSecondHoursParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/reminder/second-hours'
+      Type: String
+      Value: '2'
+
+  ReminderCatchupMinutesParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/reminder/catchup-minutes'
+      Type: String
+      Value: '30'
+
+  FaultInjectionParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/medislot/${Environment}/testing/allow-fault-injection'
+      Type: String
+      Value: !If [IsNotProd, '1', '0']
 
 Outputs:
   DBEndpoint:

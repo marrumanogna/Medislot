@@ -455,7 +455,7 @@ Resources:
               - apigateway:DELETE
             Resource:
               - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
-         
+
           - Sid: ManageApiGatewayCloudWatchRole
             Effect: Allow
             Action:
@@ -504,6 +504,86 @@ Resources:
     Properties:
       CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
 
+  MediSlotGitHubActionsWorkflowPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub MediSlot-${Environment}-GitHubActionsWorkflowPolicy
+      Description: SNS, SQS, EventBridge rules, Step Functions and event source mappings for Milestone 6.
+      Roles:
+        - !Ref GitHubActionsRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManageMediSlotSnsTopics
+            Effect: Allow
+            Action:
+              - sns:CreateTopic
+              - sns:DeleteTopic
+              - sns:GetTopicAttributes
+              - sns:SetTopicAttributes
+              - sns:TagResource
+              - sns:UntagResource
+              - sns:ListTagsForResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:medislot-${Environment}-*
+          - Sid: ManageMediSlotSqsQueues
+            Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:GetQueueUrl
+              - sqs:GetQueueAttributes
+              - sqs:SetQueueAttributes
+              - sqs:TagQueue
+              - sqs:UntagQueue
+              - sqs:ListQueueTags
+            Resource:
+              - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:medislot-${Environment}-*
+          - Sid: ManageMediSlotEventRules
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:ListTargetsByRule
+              - events:TagResource
+              - events:UntagResource
+              - events:ListTagsForResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/medislot-${Environment}-*
+          - Sid: ManageMediSlotStateMachines
+            Effect: Allow
+            Action:
+              - states:CreateStateMachine
+              - states:DeleteStateMachine
+              - states:DescribeStateMachine
+              - states:UpdateStateMachine
+              - states:TagResource
+              - states:UntagResource
+              - states:ListTagsForResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:medislot-${Environment}-*
+          - Sid: PassRescheduleRoleToStepFunctions
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/MediSlot-${Environment}-RescheduleStateMachineRole
+            Condition:
+              StringEquals:
+                iam:PassedToService: states.amazonaws.com
+          - Sid: ManageLambdaEventSourceMappings
+            Effect: Allow
+            Action:
+              - lambda:CreateEventSourceMapping
+              - lambda:DeleteEventSourceMapping
+              - lambda:GetEventSourceMapping
+              - lambda:UpdateEventSourceMapping
+              - lambda:ListEventSourceMappings
+            Resource: "*"
+
 Outputs:
   DeploymentRoleName:
     Description: GitHub Actions deployment role receiving the policies.
@@ -524,3 +604,7 @@ Outputs:
   ApiGatewayPolicyArn:
     Description: API Gateway permissions policy ARN.
     Value: !Ref MediSlotGitHubActionsApiGatewayPolicy
+
+  WorkflowPolicyArn:
+    Description: Milestone 6 workflow permissions policy ARN.
+    Value: !Ref MediSlotGitHubActionsWorkflowPolicy

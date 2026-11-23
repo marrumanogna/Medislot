@@ -8,9 +8,6 @@ Parameters:
   ApiBaseUrl:
     Type: String
     Description: API Gateway invoke URL including stage, no trailing slash
-  FlaskSecret:
-    Type: String
-    NoEcho: true
     MinLength: 32
   InstanceType:
     Type: String
@@ -92,15 +89,16 @@ Resources:
 
           cat > /opt/medislot/.env <<'ENVVARS'
           API_BASE_URL=${ApiBaseUrl}
-          FLASK_SECRET_KEY=${FlaskSecret}
           SESSION_COOKIE_SECURE=0
           ENVVARS
+          # The session secret is generated on the instance, so it never changes the stack and never lives in git
+          echo "FLASK_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> /opt/medislot/.env
           chmod 600 /opt/medislot/.env
 
           cat > /opt/medislot/deploy.sh <<'DEPLOY'
           #!/bin/bash
           set -eux
-          aws s3 cp s3://${DashboardBucketName}/dashboard.tgz /tmp/dashboard.tgz
+          aws s3 cp s3://${DashboardBucketName}/dashboard/dashboard.tgz /tmp/dashboard.tgz
           tar -xzf /tmp/dashboard.tgz -C /opt/medislot
           [ -d /opt/medislot/venv ] || python3 -m venv /opt/medislot/venv
           /opt/medislot/venv/bin/pip install -r /opt/medislot/requirements.txt
@@ -126,9 +124,39 @@ Resources:
           systemctl daemon-reload
           systemctl enable medislot
 
-          # Wait (up to ~10 min) for you to upload dashboard.tgz to the bucket
+          # Re-deploys the app whenever the pipeline uploads a new bundle (checked every 2 minutes)
+          cat > /opt/medislot/auto-update.sh <<'UPDATE'
+          #!/bin/bash
+          etag=$(aws s3api head-object --bucket ${DashboardBucketName} --key dashboard/dashboard.tgz --query ETag --output text) || exit 0
+          [ "$etag" = "$(cat /opt/medislot/.bundle-etag 2>/dev/null)" ] && exit 0
+          /opt/medislot/deploy.sh && echo "$etag" > /opt/medislot/.bundle-etag
+          UPDATE
+          chmod +x /opt/medislot/auto-update.sh
+
+          cat > /etc/systemd/system/medislot-update.service <<'UNIT'
+          [Unit]
+          Description=MediSlot dashboard bundle update
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/medislot/auto-update.sh
+          UNIT
+          cat > /etc/systemd/system/medislot-update.timer <<'UNIT'
+          [Unit]
+          Description=Check for a new MediSlot dashboard bundle
+          [Timer]
+          OnBootSec=30s
+          OnUnitActiveSec=2min
+          [Install]
+          WantedBy=timers.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable --now medislot-update.timer
+
+          # First install: wait (up to ~10 min) for the pipeline's bundle upload, then start the app
           for i in $(seq 1 60); do
-            /opt/medislot/deploy.sh && break || sleep 10
+            /opt/medislot/auto-update.sh
+            [ -f /opt/medislot/.bundle-etag ] && break
+            sleep 10
           done
 
 Outputs:

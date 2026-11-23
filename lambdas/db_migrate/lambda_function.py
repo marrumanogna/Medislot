@@ -323,11 +323,18 @@ def migrate_m5_002_frozen_rules(cur):
     return changes
 
 
+def migrate_m6_001_reschedule_count(cur):
+    """Milestone 6: per-appointment reschedule counter (frozen rule: at most 2)."""
+    ensure_column(cur, "appointments", "reschedule_count", "TINYINT UNSIGNED NOT NULL DEFAULT 0")
+    return {"columns_added": ["appointments.reschedule_count"]}
+
+
 MIGRATIONS = (
     ("m4_001_doctor_search", migrate_m4_doctor_search),
     ("m4_002_users_first_last_name", migrate_m4_002_users_first_last_name),
     ("m5_001_booking_engine", migrate_m5_001_booking_engine),
     ("m5_002_frozen_rules", migrate_m5_002_frozen_rules),
+    ("m6_001_reschedule_count", migrate_m6_001_reschedule_count),
 )
 
 

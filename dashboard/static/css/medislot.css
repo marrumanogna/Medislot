@@ -919,3 +919,4 @@ dialog form, dialog .dlg { display: grid; }
 .slot-pick button small { font-weight: 500; font-size: 11.5px; color: var(--muted, #667085); }
 .slot-pick button:disabled { opacity: .5; cursor: not-allowed; }
 .slot-pick button:disabled:hover { border-color: var(--line-strong); }
+.slot-pick button[data-full] { background: var(--amber-wash, #fff7e6); border-style: dashed; }
