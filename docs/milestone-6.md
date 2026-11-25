@@ -54,3 +54,9 @@ patient -> patient+doctor, cancelled by doctor -> patient, offer issued/expired 
 * Tests: `tests/test_m6_*.py` (unit), `tests/integration/test_m6_workflows.py` (Mandatory Tests 3 and 4).
 
 * Doctor slot cancellation (`SlotSeatFreed` with `closed=true`) ends live offers and clears that slot's queue; waitlists for slots that already started are ignored by the 5-list cap and the listing.
+
+
+## Doctor outcome and blackout rules (added 25 Nov)
+* `POST /doctor/appointments/{appointment_id}/outcome` `{"outcome": "COMPLETED" | "NO_SHOW"}` (DOCTOR). Allowed once the slot has started; repeat calls are replay-safe; NO_SHOW writes a 0% refund row. Other doctors get 404.
+* `POST/PUT /doctor/blackout-dates` returns 409 `BLACKOUT_HAS_BOOKINGS` plus `booked_slots` while confirmed patients exist on that IST day. The doctor cancels those slots (`/doctor/slots/{id}/cancel`, full refund, `AppointmentCancelled` notifications), then the blackout is accepted. `GET /doctor/blackout-dates?check_date=YYYY-MM-DD` lists those slots for the UI.
+* Dashboard stack: new `SshCidr` parameter (default = EC2 Instance Connect range for us-east-1) opens port 22; empty value removes the rule (Session Manager only).

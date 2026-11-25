@@ -391,13 +391,43 @@
         <td class="actions"><span class="row-actions"><button class="btn btn-danger btn-sm" data-id="${b.blackout_id}">Remove</button></span></td></tr>`).join("")}</tbody></table></div>`;
     }
 
+    const conflict = $("#bo-conflict"), addBtn = $("button[type=submit]", form);
+    function showConflict(date, slots) {
+      addBtn.disabled = slots.length > 0;
+      if (!slots.length) { conflict.classList.add("hidden"); conflict.innerHTML = ""; return; }
+      conflict.innerHTML = `<div class="alert alert-error" role="alert" style="margin-bottom:12px">Patients are booked on ${esc(prettyDate(date, { weekday: "short", year: "numeric", month: "short", day: "numeric" }))}. Cancel these slots (every patient is refunded in full), then you can add the blackout date.</div>
+        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Patient(s)</th><th class="actions"><span class="sr-only">Actions</span></th></tr></thead><tbody>${slots.map((x) => `
+          <tr><td><strong>${esc(x.slot_start)}–${esc(x.slot_end)}</strong></td><td>${x.patients.map(esc).join(", ")}</td>
+          <td class="actions"><span class="row-actions"><button class="btn btn-danger btn-sm" type="button" data-cancel-slot="${esc(x.slot_id)}">Cancel slot</button></span></td></tr>`).join("")}</tbody></table></div>`;
+      conflict.classList.remove("hidden");
+    }
+    async function checkDate() {
+      const date = $("#bo-date").value;
+      err.classList.add("hidden");
+      if (!date) { showConflict("", []); return; }
+      const r = await api("GET", EP.blackouts, undefined, { check_date: date });
+      if (r.ok && $("#bo-date").value === date) showConflict(date, r.data.booked_slots || []);
+    }
+    $("#bo-date").addEventListener("change", checkDate);
+    conflict.addEventListener("click", async (e) => {
+      const cs = e.target.closest("button[data-cancel-slot]"); if (!cs) return;
+      if (!await confirmDialog("Cancel this slot?", "Every patient booked in it is refunded in full and notified.", "Cancel slot")) return;
+      await withBusy(cs, async () => {
+        const r = await api("POST", `doctor/slots/${encodeURIComponent(cs.dataset.cancelSlot)}/cancel`, {});
+        if (r.ok) toast(`Slot cancelled. ${r.data.cancelled_appointments} patient(s) refunded in full.`);
+        else toast(errorMessage(r, "Could not cancel the slot."), "error");
+        await checkDate();
+      });
+    });
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault(); err.classList.add("hidden");
       const date = $("#bo-date").value;
       if (!date) { err.textContent = "Choose a date."; err.classList.remove("hidden"); return; }
-      await withBusy($("button[type=submit]", form), async () => {
+      await withBusy(addBtn, async () => {
         const res = await api("POST", EP.blackouts, { blackout_date: date, reason: $("#bo-reason").value.trim() || null });
-        if (res.ok) { toast("Blackout date added."); form.reset(); load(); }
+        if (res.ok) { toast("Blackout date added."); form.reset(); showConflict("", []); load(); }
+        else if (res.status === 409 && res.data && res.data.code === "BLACKOUT_HAS_BOOKINGS") showConflict(date, res.data.booked_slots || []);
         else { err.textContent = res.status === 409 || res.status === 500 ? "That date may already be blocked. Check the list below." : errorMessage(res); err.classList.remove("hidden"); }
       });
     });
@@ -504,26 +534,44 @@
     load();
   };
 
-  /* ---------- Appointments (booked slots, next 7 days) ---------- */
+  /* ---------- Appointments: mark checked / no-show ---------- */
   pages.appointments = async () => {
-    const prof = await loadProfile();
-    const tz = prof?.timezone || "UTC";
-    const start = isoDateIn(tz);
-    const groups = [];
-    let firstError = null;
-    for (let i = 0; i < 7; i++) {
-      const d = addDays(start, i);
-      const r = await api("GET", EP.schedule, undefined, { date: d });
-      if (!r.ok) { firstError = firstError || r; continue; }
-      const booked = (r.data.slots || []).filter((s) => s.status === "BOOKED");
-      if (booked.length) groups.push({ d, booked });
+    const body = $("#appt-body");
+    const badge = { CONFIRMED: ["badge-blue", "Upcoming"], COMPLETED: ["badge-green", "Patient checked"], NO_SHOW: ["badge-red", "No-show"] };
+    let items = [];
+
+    async function load() {
+      const r = await api("GET", "doctor/appointments");
+      if (!r.ok) { body.innerHTML = failBox(r, true); return; }
+      items = (r.data.items || []).filter((a) => badge[a.status]);
+      if (!items.length) { body.innerHTML = emptyState(ICON_CAL, "No appointments yet", "When patients book your open slots, they'll show up here."); return; }
+      const open = items.filter((a) => a.status === "CONFIRMED").sort((x, y) => x.slot_start.localeCompare(y.slot_start));
+      const done = items.filter((a) => a.status !== "CONFIRMED").sort((x, y) => y.slot_start.localeCompare(x.slot_start));
+      const now = Date.now();
+      const row = (a) => {
+        const started = new Date(a.slot_start).getTime() <= now;
+        const [cls, label] = badge[a.status];
+        const act = a.status === "CONFIRMED" && started
+          ? `<button class="btn btn-primary btn-sm" data-outcome="COMPLETED" data-id="${a.appointment_id}">Patient checked</button> <button class="btn btn-danger btn-sm" data-outcome="NO_SHOW" data-id="${a.appointment_id}">No-show</button>`
+          : (a.status === "CONFIRMED" ? '<span class="muted">Available after start</span>' : "");
+        return `<tr><td><strong>${esc(prettyDate(a.slot_start.slice(0, 10), { weekday: "short", year: undefined }))}</strong> ${esc(a.slot_start.slice(11, 16))}</td>
+          <td>${esc(a.patient_name || "Patient")}</td><td>${esc(a.consultation_type || "")}</td>
+          <td><span class="badge ${cls}">${label}</span></td><td class="actions"><span class="row-actions">${act}</span></td></tr>`;
+      };
+      body.innerHTML = `<div class="table-wrap"><table><thead><tr><th>When</th><th>Patient</th><th>Type</th><th>Status</th><th class="actions"><span class="sr-only">Actions</span></th></tr></thead><tbody>${open.concat(done).map(row).join("")}</tbody></table></div>`;
     }
-    if (!groups.length) {
-      $("#appt-body").innerHTML = firstError ? failBox(firstError, true)
-        : emptyState(ICON_CAL, "No booked appointments yet", "When patients book your open slots, they'll show up here by day.");
-      return;
-    }
-    $("#appt-body").innerHTML = groups.map((g) => `<div style="padding:12px 24px 4px;font-weight:700;background:var(--mist);border-top:1px solid var(--line)">${esc(prettyDate(g.d, { year: undefined }))}</div><div class="timeline">${slotRows(g.booked)}</div>`).join("");
+
+    body.addEventListener("click", async (e) => {
+      const b = e.target.closest("button[data-outcome]"); if (!b) return;
+      const noShow = b.dataset.outcome === "NO_SHOW";
+      if (!await confirmDialog(noShow ? "Mark as no-show?" : "Mark patient as checked?", noShow ? "The patient did not attend. No refund is issued." : "The visit is recorded as completed.", noShow ? "No-show" : "Confirm")) return;
+      await withBusy(b, async () => {
+        const r = await api("POST", `doctor/appointments/${encodeURIComponent(b.dataset.id)}/outcome`, { outcome: b.dataset.outcome });
+        if (r.ok) { toast(noShow ? "Marked as no-show." : "Marked as checked."); await load(); }
+        else toast(errorMessage(r, "Could not update the appointment."), "error");
+      });
+    });
+    load();
   };
 
   /* ---------- Settings ---------- */

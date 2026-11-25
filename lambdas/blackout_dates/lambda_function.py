@@ -1,10 +1,50 @@
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from common import config, dbconn, response, body
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def booked_slots_on(cur, doctor_id, day):
+    """Slots (IST calendar day) that still hold confirmed patients, grouped per slot."""
+    start = datetime.combine(date.fromisoformat(day), datetime.min.time()) - IST_OFFSET
+    cur.execute(
+        """
+        SELECT a.slot_id, a.slot_start, a.slot_end, pt.full_name AS patient_name
+        FROM appointments a
+        LEFT JOIN patients pt ON pt.patient_id = a.patient_id
+        WHERE a.doctor_id = %s AND a.status = 'CONFIRMED'
+          AND a.slot_start >= %s AND a.slot_start < %s
+        ORDER BY a.slot_start, a.appointment_id
+        """,
+        (doctor_id, start, start + timedelta(days=1)),
+    )
+    slots = {}
+    for r in cur.fetchall() or []:
+        item = slots.setdefault(int(r["slot_id"]), {
+            "slot_id": int(r["slot_id"]),
+            "slot_start": (r["slot_start"] + IST_OFFSET).strftime("%H:%M"),
+            "slot_end": (r["slot_end"] + IST_OFFSET).strftime("%H:%M"),
+            "patients": [],
+        })
+        item["patients"].append(r.get("patient_name") or "Patient")
+    return list(slots.values())
+
+
+def blocked_by_bookings(cur, doctor_id, day):
+    slots = booked_slots_on(cur, doctor_id, day)
+    if not slots:
+        return None
+    return response(409, {
+        "code": "BLACKOUT_HAS_BOOKINGS",
+        "message": "Patients are booked on this date. Cancel those slots first, then add the blackout date.",
+        "date": day,
+        "booked_slots": slots,
+    })
 
 
 def handler(event, context):
@@ -124,6 +164,16 @@ def handler(event, context):
             # --------------------------------
             # GET ALL BLACKOUT DATES
             # --------------------------------
+            check_date = (event.get("queryStringParameters") or {}).get("check_date")
+            if method == "GET" and check_date:
+                try:
+                    if date.fromisoformat(check_date).isoformat() != check_date:
+                        raise ValueError
+                except ValueError:
+                    return response(400, {"message": "check_date must use YYYY-MM-DD format"})
+                return response(200, {"date": check_date,
+                                      "booked_slots": booked_slots_on(cur, doctor_id, check_date)})
+
             if method == "GET" and not blackout_id:
 
                 logger.info("Fetching all blackout dates for doctor_id=%s", doctor_id)
@@ -208,6 +258,10 @@ def handler(event, context):
 
                 logger.info("Creating blackout date: %s", blackout_date)
 
+                blocked = blocked_by_bookings(cur, doctor_id, blackout_date)
+                if blocked:
+                    return blocked
+
                 cur.execute(
                     """
                     INSERT INTO doctor_blackout_dates
@@ -260,6 +314,10 @@ def handler(event, context):
                     return response(404, {
                         "message": "Blackout date not found"
                     })
+
+                blocked = blocked_by_bookings(cur, doctor_id, blackout_date)
+                if blocked:
+                    return blocked
 
                 # Update existing blackout date
                 cur.execute(
