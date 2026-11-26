@@ -1,7 +1,7 @@
 import logging
 import re
 from datetime import date
-from common import config, dbconn, body, response, emit, correlation
+from common import logged, config, dbconn, body, response, emit, correlation
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -310,3 +310,6 @@ def handler(event, context):
     finally:
         if conn is not None:
             conn.close()
+
+
+handler = logged(handler)

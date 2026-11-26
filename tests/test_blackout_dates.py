@@ -65,6 +65,7 @@ def test_list_blackout_dates(api):
 def test_create_blackout_date(api):
     module, conn, cursor = api
     cursor.lastrowid = 7
+    cursor.fetchall.return_value = []
     result = module.handler(
         event("POST", {
             "blackout_date": "2026-12-25",
@@ -92,3 +93,28 @@ def test_delete_blackout_date(api):
     result = module.handler(event("DELETE", blackout_id="7"), None)
     assert result["statusCode"] == 200
     conn.commit.assert_called_once()
+
+
+def test_blackout_blocked_while_patients_booked(api):
+    from datetime import datetime
+    module, conn, cursor = api
+    cursor.fetchall.return_value = [{
+        "slot_id": 5, "slot_start": datetime(2026, 12, 25, 4, 30), "slot_end": datetime(2026, 12, 25, 5, 0),
+        "patient_name": "Asha",
+    }]
+    result = module.handler(event("POST", {"blackout_date": "2026-12-25"}), None)
+    assert result["statusCode"] == 409
+    assert result["body"]["code"] == "BLACKOUT_HAS_BOOKINGS"
+    assert result["body"]["booked_slots"][0]["slot_start"] == "10:00"
+    assert result["body"]["booked_slots"][0]["patients"] == ["Asha"]
+    conn.commit.assert_not_called()
+
+
+def test_check_date_lists_booked_slots(api):
+    module, _, cursor = api
+    cursor.fetchall.return_value = []
+    ev = event("GET")
+    ev["queryStringParameters"] = {"check_date": "2026-12-25"}
+    result = module.handler(ev, None)
+    assert result["statusCode"] == 200
+    assert result["body"]["booked_slots"] == []

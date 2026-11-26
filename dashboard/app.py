@@ -210,6 +210,8 @@ DOCTOR_PAGES = {
     "doctor_blackouts": ("/doctor/blackouts", "blackouts", "Blackout dates"),
     "doctor_schedule": ("/doctor/schedule", "schedule", "Schedule"),
     "doctor_appointments": ("/doctor/appointments", "appointments", "Appointments"),
+    "doctor_history": ("/doctor/history", "history", "History"),
+    "doctor_refunds": ("/doctor/refunds", "refunds", "Refunds"),
     "doctor_settings": ("/doctor/settings", "settings", "Settings"),
 }
 
@@ -229,6 +231,8 @@ PATIENT_PAGES = {
     "patient_home": ("/patient", "overview", "Overview"),
     "patient_doctors": ("/patient/doctors", "doctors", "Find a doctor"),
     "patient_appointments": ("/patient/appointments", "appointments", "My appointments"),
+    "patient_history": ("/patient/history", "history", "History"),
+    "patient_refunds": ("/patient/refunds", "refunds", "Refunds"),
     "patient_waitlists": ("/patient/waitlists", "waitlists", "My waitlists"),
     "patient_profile": ("/patient/profile", "profile", "My profile"),
 }

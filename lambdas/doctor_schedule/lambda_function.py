@@ -3,7 +3,7 @@ import logging
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from common import config, dbconn, response, correlation, emit
+from common import logged, config, dbconn, response, correlation, emit
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -266,3 +266,6 @@ def handler(event, context):
     finally:
         if conn is not None:
             conn.close()
+
+
+handler = logged(handler)

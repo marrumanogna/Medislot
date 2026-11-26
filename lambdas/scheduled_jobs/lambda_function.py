@@ -13,7 +13,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from common import config, dbconn
+from common import logged, config, dbconn
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -135,3 +135,6 @@ def handler(event, context):
         raise ValueError(f"Unknown action {action!r}")
     finally:
         conn.close()
+
+
+handler = logged(handler)

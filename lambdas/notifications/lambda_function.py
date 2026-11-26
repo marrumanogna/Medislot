@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 
 import boto3
 from botocore.exceptions import ClientError
@@ -52,21 +53,60 @@ def recipients(detail_type, d):
     return []
 
 
+def when(value):
+    """Human readable time with the offset it was issued in, e.g. 'Thu 26 Nov 2026, 10:00 AM (UTC+05:30)'."""
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except ValueError:
+        return str(value)
+    off = dt.strftime("%z")
+    return dt.strftime("%a %d %b %Y, %I:%M %p") + (f" (UTC{off[:3]}:{off[3:]})" if off else "")
+
+
 def compose(detail_type, rtype, d):
-    start = d.get("slot_start", "")
+    """Returns (subject, one-line text, formatted e-mail body)."""
+    patient = rtype == "patient"
+    rows = []
+    if d.get("appointment_id") is not None:
+        rows.append(("Appointment", f"#{d['appointment_id']}"))
+    if d.get("slot_start"):
+        rows.append(("When", when(d["slot_start"])))
+    closing = ""
     if detail_type == "AppointmentBooked":
-        return "Appointment booked", f"Appointment #{d.get('appointment_id')} is confirmed for {start}."
-    if detail_type == "AppointmentRescheduled":
-        return "Appointment rescheduled", f"Appointment #{d.get('appointment_id')} moved to {start}."
-    if detail_type == "AppointmentCancelled":
-        who = "the doctor" if d.get("status") == "CANCELLED_BY_DOCTOR" else "the patient"
-        refund = f" Refund: {d.get('refund_amount')} ({d.get('refund_percent')}%)." if rtype == "patient" else ""
-        return "Appointment cancelled", f"Appointment #{d.get('appointment_id')} was cancelled by {who}.{refund}"
-    if detail_type == "WaitlistOfferIssued":
-        return "A seat is held for you", f"Accept offer {d.get('offer_id')} before it expires."
-    if detail_type == "WaitlistOfferExpired":
-        return "Your waitlist offer expired", f"Offer {d.get('offer_id')} was not accepted in time."
-    return f"Appointment reminder ({d.get('hours_before')}h)", f"Appointment #{d.get('appointment_id')} starts at {start}."
+        title = "Appointment booked"
+        lead = "Your appointment is confirmed." if patient else "A patient has booked an appointment with you."
+    elif detail_type == "AppointmentRescheduled":
+        title = "Appointment rescheduled"
+        lead = "Your appointment has been moved to the time below." if patient else "An appointment on your schedule was rescheduled."
+    elif detail_type == "AppointmentCancelled":
+        by_doctor = d.get("status") == "CANCELLED_BY_DOCTOR"
+        title = "Appointment cancelled"
+        lead = ("Your appointment was cancelled by the doctor." if by_doctor else
+                "Your appointment has been cancelled." if patient else "A patient cancelled an appointment.")
+        if patient and d.get("refund_amount") is not None:
+            rows.append(("Refund", f"{d.get('refund_amount')} ({d.get('refund_percent')}%)"))
+    elif detail_type == "WaitlistOfferIssued":
+        title = "A seat is held for you"
+        lead = "A seat has opened up for a slot you were waiting for, and it is being held for you."
+        rows.append(("Offer", str(d.get("offer_id"))))
+        if d.get("expires_at"):
+            rows.append(("Respond by", when(d["expires_at"])))
+        closing = "Please accept the offer before it expires, otherwise the seat passes to the next patient."
+    elif detail_type == "WaitlistOfferExpired":
+        title = "Your waitlist offer expired"
+        lead = "The seat that was held for you was not accepted in time and has been released."
+        rows.append(("Offer", str(d.get("offer_id"))))
+    else:
+        hours = d.get("hours_before")
+        title = "Appointment reminder"
+        lead = f"Your appointment starts in about {hours} hours." if hours else "Your appointment is coming up."
+    width = max([len(k) for k, _ in rows] or [0])
+    details = "\n".join(f"  {k.ljust(width)} : {v}" for k, v in rows)
+    body = "Hello,\n\n" + lead + "\n" + (f"\n{details}\n" if details else "") + (f"\n{closing}\n" if closing else "") + \
+        "\nRegards,\nThe MediSlot team\n\nThis is an automated message, please do not reply."
+    return f"MediSlot: {title}", lead + (" " + " | ".join(f"{k}: {v}" for k, v in rows) if rows else ""), body
 
 
 def send(event_key, detail_type, rtype, rid, detail):
@@ -79,26 +119,33 @@ def send(event_key, detail_type, rtype, rid, detail):
             ConditionExpression="attribute_not_exists(dispatch_key)")
     except ClientError as exc:
         if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            logger.info("Duplicate notification skipped: key=%s", key)
             return False
         raise
-    subject, text = compose(detail_type, rtype, detail)
+    subject, text, email_body = compose(detail_type, rtype, detail)
     try:
         sns().publish(
             TopicArn=os.environ["PATIENT_TOPIC_ARN" if rtype == "patient" else "DOCTOR_TOPIC_ARN"],
             Subject=subject[:100],
-            Message=json.dumps({"event": detail_type, "recipient": rtype, "recipient_id": rid, "text": text,
-                                "detail": detail}, default=str),
+            MessageStructure="json",
+            Message=json.dumps({
+                "default": json.dumps({"event": detail_type, "recipient": rtype, "recipient_id": rid, "text": text,
+                                       "detail": detail}, default=str),
+                "email": email_body}),
             MessageAttributes={"event_type": {"DataType": "String", "StringValue": detail_type},
                                "recipient_id": {"DataType": "String", "StringValue": str(rid)}})
     except Exception:
         dispatch_log().delete_item(Key={"dispatch_key": key})  # let the retry send it
         raise
     metric("NotificationsDispatched")
+    logger.info("Notification sent: event=%s recipient=%s#%s key=%s", detail_type, rtype, rid, key)
     return True
 
 
 def handler(event, context):
     failures = []
+    logger.info("Notification batch received: request_id=%s records=%s",
+                getattr(context, "aws_request_id", "-"), len(event.get("Records", [])))
     for rec in event.get("Records", []):
         try:
             msg = json.loads(rec["body"])
@@ -111,6 +158,7 @@ def handler(event, context):
                 if rid is not None:
                     send(event_key, dt, rtype, rid, detail)
         except Exception:
-            logger.exception("Notification failed")
+            logger.exception("Notification failed: message_id=%s", rec.get("messageId"))
             failures.append({"itemIdentifier": rec["messageId"]})
+    logger.info("Notification batch done: failed=%s", len(failures))
     return {"batchItemFailures": failures}

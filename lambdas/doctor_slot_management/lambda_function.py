@@ -3,7 +3,7 @@ import logging
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from common import config, dbconn, response
+from common import logged, config, dbconn, response
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -372,6 +372,45 @@ def reorder_schedule(cur, doctor_id, payload):
         unlock_schedule(cur, lock_name)
 
 
+def clear_unbooked_future_slots(cur, doctor_id, horizon):
+    """Remove future DRAFT/AVAILABLE slots that hold no confirmed patient so a changed availability
+    pattern can rebuild them. BOOKED/BLOCKED slots and any slot with a confirmed patient are never touched.
+    Returns (count_removed, removed_published) so published slots can be restored when their time is unchanged."""
+    cur.execute(
+        "SELECT s.slot_id, s.slot_start, s.slot_end, s.status, s.consultation_type_id, "
+        "EXISTS(SELECT 1 FROM appointments a WHERE a.slot_id = s.slot_id AND a.status = 'CONFIRMED') AS has_booking "
+        "FROM appointment_slots s WHERE s.doctor_id = %s AND s.slot_start > %s AND s.slot_start < %s "
+        "AND s.status IN ('DRAFT', 'AVAILABLE')",
+        (doctor_id, datetime.utcnow(), horizon),
+    )
+    removable = [r for r in (cur.fetchall() or []) if not r["has_booking"]]
+    published = [r for r in removable if r["status"] == "AVAILABLE" and r["consultation_type_id"] is not None]
+    ids = [r["slot_id"] for r in removable]
+    for i in range(0, len(ids), 200):
+        part = ids[i:i + 200]
+        cur.execute(
+            "DELETE FROM appointment_slots WHERE doctor_id = %s AND status IN ('DRAFT', 'AVAILABLE') AND slot_id IN ("
+            + ",".join(["%s"] * len(part)) + ")",
+            [doctor_id] + part,
+        )
+    logger.info("Unbooked future slots removed: doctor_id=%s removed=%s previously_published=%s",
+                doctor_id, len(ids), len(published))
+    return len(ids), published
+
+
+def restore_published(cur, doctor_id, published):
+    """Re-publish rebuilt slots whose exact start/end did not change, with their old consultation type."""
+    restored = 0
+    for r in published:
+        cur.execute(
+            "UPDATE appointment_slots SET status = 'AVAILABLE', consultation_type_id = %s "
+            "WHERE doctor_id = %s AND slot_start = %s AND slot_end = %s AND status = 'DRAFT'",
+            (r["consultation_type_id"], doctor_id, r["slot_start"], r["slot_end"]),
+        )
+        restored += cur.rowcount
+    return restored
+
+
 def publish_schedule(cur, doctor_id, payload):
     day = parse_date(payload.get("date"))
     lock_name = lock_schedule(cur, doctor_id, day)
@@ -422,6 +461,26 @@ def publish_schedule(cur, doctor_id, payload):
         unlock_schedule(cur, lock_name)
 
 
+def clear_future_drafts(cur, doctor_id):
+    """Delete future DRAFT slots on days that hold no published/booked slot, so they can be regenerated."""
+    shift = timedelta(hours=5, minutes=30)
+    cur.execute(
+        "SELECT slot_id, slot_start, status FROM appointment_slots WHERE doctor_id = %s AND slot_start > %s",
+        (doctor_id, datetime.utcnow()),
+    )
+    rows = cur.fetchall() or []
+    busy = {(r["slot_start"] + shift).date() for r in rows if r["status"] != "DRAFT"}
+    ids = [r["slot_id"] for r in rows if r["status"] == "DRAFT" and (r["slot_start"] + shift).date() not in busy]
+    for i in range(0, len(ids), 200):
+        part = ids[i:i + 200]
+        cur.execute(
+            "DELETE FROM appointment_slots WHERE doctor_id = %s AND status = 'DRAFT' AND slot_id IN ("
+            + ",".join(["%s"] * len(part)) + ")",
+            [doctor_id] + part,
+        )
+    return len(ids)
+
+
 def handler(event, context):
     conn = None
     try:
@@ -454,17 +513,40 @@ def handler(event, context):
         ).upper()
         slot_id = (event.get("pathParameters") or {}).get("slot_id")
 
-        if method == "POST" and str(payload.get("action", "create")).lower() == "generate":
+        action_name = str(payload.get("action", "create")).lower()
+        if method == "POST" and action_name in ("generate", "regenerate"):
             # Generate DRAFT slots for this doctor only (same logic as the nightly job).
-            import slot_materialiser_impl
+            # "regenerate" first drops unpublished drafts so a changed availability pattern is picked up.
             try:
                 days = max(1, min(int(payload.get("days_ahead", 14)), 30))
             except (TypeError, ValueError):
                 raise APIError(400, "days_ahead must be a number")
+            replaced, published, restored = 0, [], 0
+            if action_name == "regenerate":
+                conn = dbconn(config())
+                with conn.cursor() as cur:
+                    replaced, published = clear_unbooked_future_slots(
+                        cur, doctor_id, datetime.utcnow() + timedelta(days=days + 1))
+                conn.commit()
+                conn.close()
+                conn = None
+            import slot_materialiser_impl
             out = slot_materialiser_impl.handler(
-                {"days_ahead": days, "doctor_id": doctor_id}, context
+                {"days_ahead": days, "doctor_id": doctor_id, "fill_gaps": action_name == "regenerate"}, context
             )
-            return response(out.get("statusCode", 200), json.loads(out.get("body") or "{}"))
+            result_body = json.loads(out.get("body") or "{}")
+            if action_name == "regenerate":
+                if published and out.get("statusCode", 200) < 400:
+                    conn = dbconn(config())
+                    with conn.cursor() as cur:
+                        restored = restore_published(cur, doctor_id, published)
+                    conn.commit()
+                    conn.close()
+                    conn = None
+                result_body["slots_replaced"] = replaced
+                result_body["published_restored"] = restored
+                logger.info("Regenerate finished: doctor_id=%s replaced=%s restored=%s", doctor_id, replaced, restored)
+            return response(out.get("statusCode", 200), result_body)
 
         conn = dbconn(config())
         with conn.cursor() as cur:
@@ -519,3 +601,6 @@ def handler(event, context):
                 conn.close()
             except Exception:
                 logger.exception("Database connection close failed")
+
+
+handler = logged(handler)
