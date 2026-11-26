@@ -24,6 +24,7 @@ seats_free is 1 for an AVAILABLE slot and 0 for a BOOKED one.
 import json
 import logging
 import os
+import time as _time
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -46,6 +47,18 @@ MAX_RANGE_DAYS = 31
 DEFAULT_RANGE_DAYS = 7
 SEATS_PER_SLOT = 1
 FILTER_LIMITS = {"name": 100, "hospital": 200, "specialisation": 120, "city": 100}
+
+
+_ctx = {"cid": None}
+
+
+def log_step(name, **fields):
+    """Structured INFO log line (same JSON format as emit) tied to the request's correlation id.
+    Never raises and never logs secrets or presigned URLs."""
+    try:
+        emit("info", name, _ctx["cid"], **fields)
+    except Exception:
+        pass
 
 
 class BadRequest(Exception):
@@ -202,6 +215,9 @@ def _photo_url(doctor_id, photo_key):
         or not bucket
         or not photo_key.startswith(f"doctors/{doctor_id}/")
     ):
+        if photo_key:
+            log_step("photo_url_skipped", doctor_id=doctor_id, bucket_configured=bool(bucket),
+                     key_matches_doctor=photo_key.startswith(f"doctors/{doctor_id}/"))
         return None
 
     return s3.generate_presigned_url(
@@ -244,11 +260,17 @@ def search_doctors(cur, parsed, now_utc):
         parsed["filters"], parsed["page"], parsed["page_size"]
     )
 
+    log_step("search_start", filters=parsed["filters"], page=parsed["page"], page_size=parsed["page_size"],
+             count_sql=" ".join(count_sql.split()), page_sql=" ".join(page_sql.split()))
+    t0 = _time.time()
     cur.execute(count_sql, count_params)
     total = int(cur.fetchone()["total"])
+    log_step("search_count_done", total=total, ms=int((_time.time() - t0) * 1000))
 
+    t0 = _time.time()
     cur.execute(page_sql, page_params)
     rows = cur.fetchall()
+    log_step("search_page_done", rows=len(rows), ms=int((_time.time() - t0) * 1000))
 
     ids = [int(r["doctor_id"]) for r in rows]
     fees, next_slots = {}, {}
@@ -267,6 +289,7 @@ def search_doctors(cur, parsed, now_utc):
             ids,
         )
         fees = {int(r["doctor_id"]): r for r in cur.fetchall()}
+        log_step("search_fees_loaded", doctors=len(ids), with_fees=len(fees))
 
         cur.execute(
             "SELECT doctor_id, MIN(slot_start) AS next_slot "
@@ -277,6 +300,7 @@ def search_doctors(cur, parsed, now_utc):
             [*ids, now_utc.replace(tzinfo=None)],
         )
         next_slots = {int(r["doctor_id"]): r["next_slot"] for r in cur.fetchall()}
+        log_step("search_next_slots_loaded", doctors=len(ids), with_next_slot=len(next_slots))
 
     items = []
     for row in rows:
@@ -301,6 +325,9 @@ def search_doctors(cur, parsed, now_utc):
 
     page_size = parsed["page_size"]
     total_pages = (total + page_size - 1) // page_size
+    log_step("search_done", returned=len(items), total=total, total_pages=total_pages,
+             with_photo=sum(1 for i in items if i["photo_url"]),
+             with_next_available=sum(1 for i in items if i["next_available"]))
     return {
         "items": items,
         "page": parsed["page"],
@@ -342,6 +369,7 @@ def filter_options(cur):
         (MAX_FILTER_OPTIONS,),
     )
     cities = [r["value"] for r in cur.fetchall()]
+    log_step("filter_options_done", specializations=len(specializations), cities=len(cities))
     return {"specializations": specializations, "cities": cities}
 
 
@@ -359,6 +387,7 @@ def doctor_profile(cur, doctor_id):
         (doctor_id,),
     )
     row = cur.fetchone()
+    log_step("profile_lookup", doctor_id=doctor_id, found=row is not None)
     if row is None:
         return None
 
@@ -396,6 +425,7 @@ def doctor_profile(cur, doctor_id):
         )
 
     fees = [t["fee"] for t in types if t["fee"] is not None]
+    log_step("profile_done", doctor_id=doctor_id, consultation_types=len(types), has_photo=bool(photo_url))
     return {
         "doctor_id": int(row["doctor_id"]),
         "full_name": row["full_name"],
@@ -463,6 +493,8 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
     lo, hi = ist_day_to_utc_bounds(start, end)
     # Never offer a slot that has already started.
     lo = max(lo, now_utc.replace(tzinfo=None))
+    log_step("slots_query_start", doctor_id=doctor_id, ist_from=start.isoformat(), ist_to=end.isoformat(),
+             consultation_type_id=type_id, utc_from=lo.isoformat(), utc_to=hi.isoformat())
 
     sql = (
         "SELECT s.slot_id, s.consultation_type_id, ct.name AS consultation_type, "
@@ -485,8 +517,10 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
         params.append(type_id)
     sql += "ORDER BY s.slot_start, s.slot_id"
 
+    t0 = _time.time()
     cur.execute(sql, params)
     slots = cur.fetchall()
+    log_step("slots_fetched", doctor_id=doctor_id, rows=len(slots), ms=int((_time.time() - t0) * 1000))
 
     cur.execute(
         "SELECT blackout_date FROM doctor_blackout_dates "
@@ -494,12 +528,15 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
         (doctor_id, start, end),
     )
     blackouts = {r["blackout_date"] for r in cur.fetchall()}
+    log_step("slots_blackouts_loaded", doctor_id=doctor_id, blackout_dates=sorted(str(d) for d in blackouts))
 
     items, days = [], {}
+    skipped_blackout = 0
     for slot in slots:
         start_ist = _to_ist(slot["slot_start"])
         local_day = start_ist.date()
         if local_day in blackouts:
+            skipped_blackout += 1
             continue  # doctor is away that day
 
         total = int(slot.get("capacity") or SEATS_PER_SLOT)
@@ -526,6 +563,9 @@ def slot_availability(cur, doctor_id, start, end, type_id, now_utc):
         bucket["total_slots"] += 1
         bucket["free_seats"] += free
 
+    log_step("slots_done", doctor_id=doctor_id, returned=len(items), skipped_for_blackout=skipped_blackout,
+             slots_with_free_seats=sum(1 for i in items if i["seats_free"] > 0),
+             free_seats=sum(i["seats_free"] for i in items), full_slots=sum(1 for i in items if i["seats_free"] == 0))
     return {
         "doctor_id": doctor_id,
         "from": start.isoformat(),
@@ -562,14 +602,20 @@ def _route(event):
 
 def handler(event, context):
     cid = correlation(event)
+    _ctx["cid"] = cid
+    started = _time.time()
     method = (event.get("httpMethod") or "GET").upper()
 
     if method != "GET":
+        log_step("request_rejected", status=405, method=method)
         return error_response(405, "Method not allowed", cid)
 
     route = _route(event)
     params = event.get("queryStringParameters") or {}
     now_utc = datetime.now(UTC)
+    log_step("request_start", method=method, route=route, query=params,
+             path_params=event.get("pathParameters") or {},
+             request_id=(event.get("requestContext") or {}).get("requestId"))
 
     try:
         if route == "/doctors":
@@ -583,11 +629,14 @@ def handler(event, context):
                     params, now_utc.astimezone(IST).date()
                 )
     except BadRequest as exc:
+        log_step("request_rejected", status=400, reason=str(exc), route=route)
         return error_response(400, str(exc), cid)
 
     conn = None
     try:
+        t0 = _time.time()
         conn = dbconn(config())
+        log_step("db_connected", ms=int((_time.time() - t0) * 1000))
         with conn.cursor() as cur:
             if route == "/doctors":
                 result = search_doctors(cur, parsed, now_utc)
@@ -603,11 +652,14 @@ def handler(event, context):
         conn.rollback()  # read-only: close the transaction cleanly
 
         if result is None:
+            log_step("request_end", status=404, route=route, duration_ms=int((_time.time() - started) * 1000))
             return error_response(404, "Doctor not found", cid)
+        log_step("request_end", status=200, route=route, duration_ms=int((_time.time() - started) * 1000))
         return response(200, result)
 
     except Exception:
         logger.exception("Doctor discovery request failed")
+        log_step("request_failed", status=500, route=route, duration_ms=int((_time.time() - started) * 1000))
         emit("error", "doctor_discovery_failed", cid, route=route)
         return error_response(500, "Internal server error", cid)
 
