@@ -8,6 +8,7 @@ Routes (all behind the JWT authorizer; role is re-checked here):
     GET  /patient/refunds                      PATIENT  refund ledger
     GET  /doctor/appointments                  DOCTOR   list the doctor's appointments
     POST /doctor/slots/{slot_id}/cancel        DOCTOR   cancel a slot, full refund for everyone
+    POST /doctor/appointments/{appointment_id}/outcome  DOCTOR  {"outcome": "COMPLETED" | "NO_SHOW"} after the visit starts
 
 Design (see docs/concurrency-design-note.md):
   * The seat counter lives on a DynamoDB slot record guarded by a `version`
@@ -29,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
-from common import body as read_body, config, correlation, dbconn, response
+from common import logged, body as read_body, config, correlation, dbconn, response
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -474,6 +475,21 @@ class Repo:
             (appt["appointment_id"], appt["patient_id"], appt["fee"], amount, percent, tier, reason),
         )
 
+    def set_outcome(self, appt, outcome):
+        """CONFIRMED -> COMPLETED / NO_SHOW (guarded, so a second call changes nothing)."""
+        self.cur.execute(
+            "UPDATE appointments SET status = %s, active_slot_id = NULL "
+            "WHERE appointment_id = %s AND status = 'CONFIRMED'", (outcome, appt["appointment_id"]),
+        )
+        if self.cur.rowcount != 1:
+            raise ApiError(409, "ALREADY_CLOSED", "This appointment is no longer open.")
+        if outcome == "NO_SHOW":
+            self.cur.execute(
+                "INSERT IGNORE INTO refund_ledger (appointment_id, patient_id, fee, amount, refund_percent, tier, reason) "
+                "VALUES (%s, %s, %s, 0, 0, 'NO_SHOW', 'Patient did not attend')",
+                (appt["appointment_id"], appt["patient_id"], appt["fee"]),
+            )
+
     def get_doctor_slot(self, slot_id, doctor_id):
         self.cur.execute(
             "SELECT slot_id, doctor_id, slot_start, status FROM appointment_slots "
@@ -724,6 +740,22 @@ class Engine:
             self.events.publish("SlotSeatFreed", {"slot_id": int(slot_id), "doctor_id": int(doctor_id), "seats_free": 0, "capacity": 0, "closed": True})
         return 200, {"slot_id": int(slot_id), "cancelled_appointments": len(affected), "refund_percent": 100}
 
+    def mark_outcome(self, repo, doctor_id, appointment_id, outcome):
+        """Doctor records whether the patient was seen (COMPLETED) or did not come (NO_SHOW)."""
+        appt = repo.get_appointment(appointment_id, doctor_id=doctor_id, for_update=True)
+        if not appt:
+            raise ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found.")
+        if appt["status"] == outcome:
+            return 200, {"appointment": appointment_view(appt, "DOCTOR"), "already_marked": True}
+        if appt["status"] != "CONFIRMED":
+            raise ApiError(409, "ALREADY_CLOSED", "Only confirmed appointments can be marked.")
+        if appt["slot_start"] > self.clock():
+            raise ApiError(409, "TOO_EARLY", "You can mark the visit once the appointment time has started.")
+        repo.set_outcome(appt, outcome)
+        repo.commit()
+        return 200, {"appointment": appointment_view(repo.get_appointment(appointment_id, doctor_id=doctor_id), "DOCTOR"),
+                     "already_marked": False}
+
 
 def _slot_dict(slot):
     """JSON-safe copy of a slot row for Step Functions payloads."""
@@ -935,6 +967,13 @@ def route(event, repo, engine):
         need("PATIENT")
         return engine.cancel_by_patient(repo, user_id, _int(path.get("appointment_id"), "appointment_id"), payload.get("reason"))
 
+    if (method, resource) == ("POST", "/doctor/appointments/{appointment_id}/outcome"):
+        need("DOCTOR")
+        outcome = str(payload.get("outcome", "")).upper()
+        if outcome not in ("COMPLETED", "NO_SHOW"):
+            raise ApiError(400, "BAD_OUTCOME", "outcome must be COMPLETED or NO_SHOW.")
+        return engine.mark_outcome(repo, user_id, _int(path.get("appointment_id"), "appointment_id"), outcome)
+
     if (method, resource) == ("PATCH", "/appointments/{appointment_id}"):
         need("PATIENT")
         aid = _int(path.get("appointment_id"), "appointment_id")
@@ -1013,3 +1052,6 @@ def handler(event, context):
                 conn.close()
             except Exception:
                 pass
+
+
+handler = logged(handler)

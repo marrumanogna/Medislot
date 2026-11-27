@@ -90,6 +90,21 @@ def find_availability_conflict(
     return None
 
 
+def parse_bool(value, default=True):
+    """Accept true/false, 1/0 and their string forms; anything else returns None (rejected)."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in ("true", "1", "yes"):
+        return True
+    if isinstance(value, str) and value.strip().lower() in ("false", "0", "no"):
+        return False
+    return None
+
+
 def handler(event, context):
     logger.info("Availability patterns Lambda execution started")
 
@@ -330,6 +345,8 @@ def handler(event, context):
                         **data,
                         "timezone": IST_TIMEZONE,
                     }
+
+                merged["is_active"] = parse_bool(merged.get("is_active"))
 
                 day = merged["day_of_week"]
 

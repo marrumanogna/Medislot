@@ -30,7 +30,7 @@ import logging
 import re
 from pathlib import Path
 
-from common import config, dbconn, derive_city, emit
+from common import logged, config, dbconn, derive_city, emit
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -774,3 +774,6 @@ def handler(event, context):
                 pass
 
             conn.close()
+
+
+handler = logged(handler)

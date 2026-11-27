@@ -51,7 +51,7 @@
 
   pages.appointments = async () => {
     const r = await api("GET", EP.appointments);
-    if (!r.ok) { $("#upcoming").innerHTML = problem(r); $("#history").innerHTML = ""; return; }
+    if (!r.ok) { $("#upcoming").innerHTML = problem(r); return; }
     const all = listOf(r.data);
     const now = new Date().toISOString().slice(0, 16);
     const up = all.filter((a) => isUpcoming(a)).sort((a, b) => String(startOf(a)).localeCompare(String(startOf(b))));
@@ -69,11 +69,24 @@
         render();
       });
     };
+  };
+
+
+  /* ---------------------------------------------------------------- history (own page) */
+  pages.history = async () => {
+    const r = await api("GET", EP.appointments);
+    if (!r.ok) { $("#history").innerHTML = problem(r); return; }
+    const all = listOf(r.data);
+    const past = all.filter((a) => !isUpcoming(a)).sort((a, b) => String(startOf(b)).localeCompare(String(startOf(a))));
+    $("#history").innerHTML = past.length ? `<div class="timeline">${past.map(apptCard).join("")}</div>` : empty(ICON_CAL, "No past appointments", "Completed and cancelled visits are listed here.");
+  };
+
+  /* ---------------------------------------------------------------- refunds (own page) */
+  pages.refunds = async () => {
     const rr = await api("GET", EP.refunds);
     if ($("#refunds")) $("#refunds").innerHTML = !rr.ok ? problem(rr) : (rr.data.items || []).length
       ? `<div class="timeline">${rr.data.items.map((f) => `<div class="tl-row" style="grid-template-columns:1fr auto"><div class="tl-body"><strong>${esc(f.doctor_name || "Appointment")}</strong><span>${esc(fmtWhen(f.slot_start))} · ${esc(f.consultation_type || "")} · ${esc(f.tier.replace(/_/g, " ").toLowerCase())}</span></div><strong>${esc(money(f.amount))}</strong></div>`).join("")}</div><p class="muted" style="margin:10px 24px">Total refunded: ${esc(money(rr.data.total_refunded))}</p>`
       : empty(ICON_CAL, "No refunds yet", "Refunds for cancelled appointments appear here.");
-    $("#history").innerHTML = past.length ? `<div class="timeline">${past.map(apptCard).join("")}</div>` : empty(ICON_CAL, "No past appointments", "Completed and cancelled visits are listed here.");
   };
 
   /* ---------------------------------------------------------------- doctor search */

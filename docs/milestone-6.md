@@ -54,3 +54,23 @@ patient -> patient+doctor, cancelled by doctor -> patient, offer issued/expired 
 * Tests: `tests/test_m6_*.py` (unit), `tests/integration/test_m6_workflows.py` (Mandatory Tests 3 and 4).
 
 * Doctor slot cancellation (`SlotSeatFreed` with `closed=true`) ends live offers and clears that slot's queue; waitlists for slots that already started are ignored by the 5-list cap and the listing.
+
+
+## Doctor outcome and blackout rules (added 25 Nov)
+* `POST /doctor/appointments/{appointment_id}/outcome` `{"outcome": "COMPLETED" | "NO_SHOW"}` (DOCTOR). Allowed once the slot has started; repeat calls are replay-safe; NO_SHOW writes a 0% refund row. Other doctors get 404.
+* `POST/PUT /doctor/blackout-dates` returns 409 `BLACKOUT_HAS_BOOKINGS` plus `booked_slots` while confirmed patients exist on that IST day. The doctor cancels those slots (`/doctor/slots/{id}/cancel`, full refund, `AppointmentCancelled` notifications), then the blackout is accepted. `GET /doctor/blackout-dates?check_date=YYYY-MM-DD` lists those slots for the UI.
+* Dashboard stack: new `SshCidr` parameter (default = EC2 Instance Connect range for us-east-1) opens port 22; empty value removes the rule (Session Manager only).
+
+## Update 26 Nov
+* Availability PATCH accepts MySQL 0/1 for `is_active` (editing hours no longer fails with "is_active must be true or false").
+* Any availability-pattern change calls `POST /doctor/slots {"action":"regenerate"}`: future DRAFT slots on days with no published/booked slot are removed and rebuilt from the current patterns. The materialiser now honours `doctor_id` on direct invokes.
+* Doctors cancel slots only from the Appointments page (Schedule page button removed; Blackout page links there).
+* Patient portal: History and Refunds are separate pages (`/patient/history`, `/patient/refunds`).
+
+
+## Availability rebuild, doctor History/Refunds, e-mail format, logging (26 Nov)
+* Changing, pausing or removing an availability pattern calls `POST /doctor/slots {"action":"regenerate"}`: every future DRAFT/AVAILABLE slot with no confirmed patient is rebuilt from the new hours; BOOKED/BLOCKED slots and slots with patients are never touched, and new slots are laid out around them. Rebuilt slots whose start and end did not change keep their consultation type and stay published.
+* `is_active` accepts true/false, 1/0 and their string forms (the "is_active must be true or false" error on edit is gone).
+* Doctor portal: Appointments shows only open (confirmed) appointments and is the only place to cancel a slot or mark checked / no-show; History and Refunds are separate pages.
+* Notification e-mails are plain-text messages (greeting, details table, sign-off) sent through SNS `MessageStructure=json`; programmatic subscribers still receive the JSON payload.
+* Every Lambda logs START / END (request id, route, role, user, status, duration) via `common.logged`, plus stack traces on failure.

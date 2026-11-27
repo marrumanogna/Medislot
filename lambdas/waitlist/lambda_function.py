@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from common import body as read_body, config, correlation, dbconn, response
+from common import logged, body as read_body, config, correlation, dbconn, response
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -571,3 +571,6 @@ def handler(event, context):
                 conn.close()
             except Exception:
                 pass
+
+
+handler = logged(handler)

@@ -19,11 +19,16 @@ Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  SshCidr:
+    Type: String
+    Default: 18.206.107.24/29
+    Description: Source range allowed on port 22. Default is the EC2 Instance Connect range for us-east-1 (browser Connect button). Add your own IP as x.x.x.x/32 for a normal SSH client; empty = no SSH rule (use Session Manager).
   DashboardBucketName:
     Type: String
     Description: Existing S3 bucket containing the dashboard bundle
 
 Conditions:
+  HasSsh: !Not [!Equals [!Ref SshCidr, ""]]
   HasKey: !Not [!Equals [!Ref KeyName, ""]]
 
 Resources:
@@ -36,6 +41,10 @@ Resources:
         Fn::Sub: MediSlot-${Environment}-VPCId
       SecurityGroupIngress:
         - {Description: HTTP, IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
+        - !If
+          - HasSsh
+          - {Description: SSH / EC2 Instance Connect, IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref SshCidr}
+          - !Ref "AWS::NoValue"
       Tags:
         - {Key: Name, Value: !Sub "medislot-${Environment}-dashboard-sg"}
 

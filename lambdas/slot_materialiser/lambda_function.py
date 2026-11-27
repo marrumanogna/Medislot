@@ -102,6 +102,7 @@ def handler(event, context):
         # EventBridge execution processes all doctors.
         # API Gateway execution processes only the authenticated doctor.
         doctor_id_filter = None
+        fill_gaps = False
 
         if request_context:
             role = str(authorizer.get("role") or "").upper()
@@ -138,6 +139,9 @@ def handler(event, context):
             days_ahead = int(body.get("days_ahead", 14))
         else:
             days_ahead = int(event.get("days_ahead", 30))
+            fill_gaps = bool(event.get("fill_gaps"))
+            if event.get("doctor_id") is not None:
+                doctor_id_filter = int(event["doctor_id"])
 
         if not 1 <= days_ahead <= 90:
             return response(400, {
@@ -386,12 +390,12 @@ def handler(event, context):
 
                         cur.execute(
                             """
-                            SELECT slot_id
+                            SELECT slot_id, slot_start, slot_end
                             FROM appointment_slots
                             WHERE doctor_id = %s
                               AND slot_start < %s
                               AND slot_end > %s
-                            LIMIT 1
+                            ORDER BY slot_start
                             """,
                             (
                                 doctor_id,
@@ -400,7 +404,9 @@ def handler(event, context):
                             )
                         )
 
-                        if cur.fetchone():
+                        existing = cur.fetchall() or []
+
+                        if existing and not fill_gaps:
 
                             skipped_existing_schedule += 1
 
@@ -414,9 +420,12 @@ def handler(event, context):
                             current_date += timedelta(days=1)
                             continue
 
-                        # No slots exist for this doctor/date.
-                        occupied = []
-                        display_order = 1
+                        # Regenerate mode: slots that were kept (booked / with patients) stay exactly
+                        # where they are and the new hours are laid out around them.
+                        occupied = sorted(
+                            (utc_to_ist(r["slot_start"]), utc_to_ist(r["slot_end"])) for r in existing
+                        )
+                        display_order = len(existing) + 1
                         type_index = 0
                         day_created = 0
 

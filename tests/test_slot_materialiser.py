@@ -161,11 +161,11 @@ def test_duplicate_insert_is_ignored():
             "duration_minutes": 30,
         }],
         [],
+        [],  # existing slots on that day (none)
     ]
 
     cursor.fetchone.side_effect = [
         {"lock_status": 1},
-        None,
     ]
 
     # Simulate MySQL reporting that INSERT IGNORE skipped a duplicate.

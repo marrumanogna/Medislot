@@ -6,6 +6,34 @@ from botocore.exceptions import ClientError
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
+def logged(fn):
+    """Wrap a Lambda handler with one START and one END log line (caller, route, status, duration).
+    Failures are logged with the stack trace and re-raised, so behaviour is unchanged."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(event, context):
+        began = time.time()
+        ev = event if isinstance(event, dict) else {}
+        auth = (ev.get("requestContext") or {}).get("authorizer") or {}
+        rid = getattr(context, "aws_request_id", "-")
+        route = ev.get("resource") or ev.get("detail-type") or ev.get("action") or "-"
+        log.info("START fn=%s request_id=%s method=%s route=%s role=%s user=%s records=%s",
+                 fn.__module__, rid, ev.get("httpMethod", "-"), route, auth.get("role", "-"),
+                 auth.get("userId", "-"), len(ev.get("Records") or []))
+        try:
+            result = fn(event, context)
+        except Exception:
+            log.exception("FAILED fn=%s request_id=%s duration_ms=%d", fn.__module__, rid, (time.time() - began) * 1000)
+            raise
+        status = result.get("statusCode") if isinstance(result, dict) else None
+        (log.warning if isinstance(status, int) and status >= 400 else log.info)(
+            "END fn=%s request_id=%s status=%s duration_ms=%d", fn.__module__, rid, status, (time.time() - began) * 1000)
+        return result
+
+    return wrapper
+
+
 ssm = boto3.client("ssm")
 ddb = boto3.resource("dynamodb")
 

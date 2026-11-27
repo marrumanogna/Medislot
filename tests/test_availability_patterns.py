@@ -88,3 +88,19 @@ def test_invalid_day_rejected(api):
     )
     assert result["statusCode"] == 400
     conn.commit.assert_not_called()
+
+
+def test_patch_times_only_accepts_mysql_int_is_active(api):
+    """MySQL returns TINYINT 1/0; editing only the hours must not trip the is_active check."""
+    from datetime import timedelta
+    module, conn, cursor = api
+    module.find_availability_conflict = MagicMock(return_value=None)
+    cursor.fetchone.return_value = {
+        "day_of_week": 1, "start_time": timedelta(hours=9), "end_time": timedelta(hours=12),
+        "timezone": "Asia/Kolkata", "is_active": 1,
+    }
+    result = module.handler(
+        event("PATCH", {"start_time": "10:00:00", "end_time": "13:00:00"}, pattern_id="5"), None
+    )
+    assert result["statusCode"] == 200, result
+    conn.commit.assert_called_once()

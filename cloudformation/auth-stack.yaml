@@ -1579,6 +1579,18 @@ Resources:
       RestApiId: !Ref RestApi
       ParentId: !Ref DoctorResource
       PathPart: 'appointments'
+  DoctorAppointmentIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref DoctorAppointmentsResource
+      PathPart: '{appointment_id}'
+  DoctorAppointmentOutcomeResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !Ref DoctorAppointmentIdResource
+      PathPart: 'outcome'
   DoctorSlotCancelResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -1662,6 +1674,18 @@ Resources:
     Properties:
       RestApiId: !Ref RestApi
       ResourceId: !Ref DoctorSlotCancelResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref ApiAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AppointmentsFunction.Arn}/invocations'
+  DoctorAppointmentOutcomePostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref DoctorAppointmentOutcomeResource
       HttpMethod: POST
       AuthorizationType: CUSTOM
       AuthorizerId: !Ref ApiAuthorizer
@@ -2236,6 +2260,7 @@ Resources:
       - PatientRefundsGetMethod
       - DoctorAppointmentsGetMethod
       - DoctorSlotCancelPostMethod
+      - DoctorAppointmentOutcomePostMethod
       - AppointmentIdPatchMethod
       - SlotWaitlistPostMethod
       - SlotWaitlistDeleteMethod
