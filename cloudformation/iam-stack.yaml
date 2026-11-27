@@ -524,6 +524,11 @@ Resources:
               - sns:TagResource
               - sns:UntagResource
               - sns:ListTagsForResource
+              - sns:Subscribe
+              - sns:Unsubscribe
+              - sns:GetSubscriptionAttributes
+              - sns:SetSubscriptionAttributes
+              - sns:ListSubscriptionsByTopic
             Resource:
               - !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:medislot-${Environment}-*
           - Sid: ManageMediSlotSqsQueues

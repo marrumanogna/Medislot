@@ -1,4 +1,4 @@
-name: MediSlot Milestone 2 CI and Deployment
+﻿name: MediSlot Milestone 2 CI and Deployment
 
 on:
   pull_request:
@@ -317,7 +317,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          BUCKET_SUFFIX="r20261126-01"
+          BUCKET_SUFFIX="r20261114"
 
           python scripts/deploy_stack.py \
             cloudformation/data-stack.yaml \
@@ -333,10 +333,10 @@ jobs:
           ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 
           OLD_ARTIFACTS="medislot-${ENVIRONMENT}-artifacts-initial-${ACCOUNT}"
-          NEW_ARTIFACTS="medislot-${ENVIRONMENT}-artifacts-r20261126-01-${ACCOUNT}"
+          NEW_ARTIFACTS="medislot-${ENVIRONMENT}-artifacts-r20261114-${ACCOUNT}"
 
           OLD_PHOTOS="medislot-${ENVIRONMENT}-doctor-photos-initial-${ACCOUNT}-${AWS_REGION}"
-          NEW_PHOTOS="medislot-${ENVIRONMENT}-doctor-photos-r20261126-01-${ACCOUNT}-${AWS_REGION}"
+          NEW_PHOTOS="medislot-${ENVIRONMENT}-doctor-photos-r20261114-${ACCOUNT}-${AWS_REGION}"
 
           echo "Copying existing Lambda artifacts..."
           aws s3 sync \
@@ -360,7 +360,7 @@ jobs:
           set -euo pipefail
 
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          BUCKET="medislot-${ENVIRONMENT}-artifacts-r20261126-01-${AWS_ACCOUNT_ID}"
+          BUCKET="medislot-${ENVIRONMENT}-artifacts-r20261114-${AWS_ACCOUNT_ID}"
 
           for fn in register login refresh logout authorizer rds_check doctor_profile consultation_types availability_patterns blackout_dates slot_materialiser doctor_schedule doctor_slot_management patient_profile doctor_discovery appointments waitlist notifications scheduled_jobs db_migrate; do
             tmp="$(mktemp -d)"
@@ -404,6 +404,9 @@ jobs:
 
       - name: Deploy authentication API stack
         shell: bash
+        env:
+          NOTIFY_PATIENT_EMAIL: ${{ secrets.NOTIFY_PATIENT_EMAIL }}
+          NOTIFY_DOCTOR_EMAIL: ${{ secrets.NOTIFY_DOCTOR_EMAIL }}
         run: |
           set -euo pipefail
 
@@ -413,9 +416,11 @@ jobs:
             cloudformation/auth-stack.yaml \
             "medislot-${ENVIRONMENT}-auth" \
             "Environment=${ENVIRONMENT}" \
-            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-r20261126-01-${ACCOUNT}" \
+            "ArtifactBucket=medislot-${ENVIRONMENT}-artifacts-r20261114-${ACCOUNT}" \
             "ArtifactPrefix=lambda/${GITHUB_SHA}" \
-            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-r20261126-01-${ACCOUNT}-${AWS_REGION}"
+            "DoctorPhotosBucketName=medislot-${ENVIRONMENT}-doctor-photos-r20261114-${ACCOUNT}-${AWS_REGION}" \
+            "PatientNotificationEmail=${NOTIFY_PATIENT_EMAIL:-}" \
+            "DoctorNotificationEmail=${NOTIFY_DOCTOR_EMAIL:-}"
       - name: Deploy Dashboard stack
         shell: bash
         run: |
@@ -431,7 +436,7 @@ jobs:
 
           # Always build the bundle from dashboard/ (no committed tgz) and upload it BEFORE the stack,
           # so a fresh instance can never boot with an old copy. The artifacts bucket is created by the data stack.
-          BUCKET="medislot-${ENVIRONMENT}-artifacts-r20261126-01-${ACCOUNT}"
+          BUCKET="medislot-${ENVIRONMENT}-artifacts-r20261114-${ACCOUNT}"
           tar -czf "$RUNNER_TEMP/dashboard.tgz" \
             --exclude=venv --exclude=flask_session --exclude=__pycache__ --exclude=.env \
             -C dashboard .

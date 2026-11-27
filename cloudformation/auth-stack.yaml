@@ -1,6 +1,18 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: MediSlot custom authentication API, JWT authorizer, least-privilege per-function roles.
 Parameters:
+  PatientNotificationEmail:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    ConstraintDescription: Must be empty or a valid e-mail address.
+    Description: Address subscribed to the patient notification topic (GitHub secret NOTIFY_PATIENT_EMAIL). Empty = no subscription.
+  DoctorNotificationEmail:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[^@\s]+@[^@\s]+\.[^@\s]+$'
+    ConstraintDescription: Must be empty or a valid e-mail address.
+    Description: Address subscribed to the doctor notification topic (GitHub secret NOTIFY_DOCTOR_EMAIL). Empty = no subscription.
   Environment:
     Type: String
     Default: dev
@@ -8,6 +20,10 @@ Parameters:
   ArtifactBucket: {Type: String}
   ArtifactPrefix: {Type: String}
   DoctorPhotosBucketName: {Type: String}
+
+Conditions:
+  HasPatientEmail: !Not [!Equals [!Ref PatientNotificationEmail, '']]
+  HasDoctorEmail: !Not [!Equals [!Ref DoctorNotificationEmail, '']]
 
 Resources:
   LambdaExecutionBasePolicy:
@@ -1707,6 +1723,15 @@ Resources:
   DoctorNotificationsTopic:
     Type: AWS::SNS::Topic
     Properties: {TopicName: !Sub 'medislot-${Environment}-doctor-notifications'}
+
+  PatientEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasPatientEmail
+    Properties: {TopicArn: !Ref PatientNotificationsTopic, Protocol: email, Endpoint: !Ref PatientNotificationEmail}
+  DoctorEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasDoctorEmail
+    Properties: {TopicArn: !Ref DoctorNotificationsTopic, Protocol: email, Endpoint: !Ref DoctorNotificationEmail}
 
   NotificationDLQ:
     Type: AWS::SQS::Queue
