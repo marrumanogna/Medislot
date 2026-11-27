@@ -8,10 +8,15 @@ Parameters:
     Default: dev
     AllowedValues: [dev, test, prod]
 
-  BucketSuffix:
+  ArtifactBucketSuffix:
     Type: String
-    Description: Unique suffix generated for each new stack deployment
+    Description: Unique suffix generated for each deployment
     Default: initial
+
+  DoctorPhotosBucketSuffix:
+    Type: String
+    Description: Stable suffix for the persistent doctor photos bucket
+    Default: r20261126-01
 
 Conditions:
   IsNotProd: !Not [!Equals [!Ref Environment, prod]]
@@ -221,7 +226,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub 'medislot-${Environment}-doctor-photos-${BucketSuffix}-${AWS::AccountId}-${AWS::Region}'
+      BucketName: !Sub 'medislot-${Environment}-doctor-photos-${DoctorPhotosBucketSuffix}-${AWS::AccountId}-${AWS::Region}'
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -239,7 +244,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub 'medislot-${Environment}-artifacts-${BucketSuffix}-${AWS::AccountId}'
+      BucketName: !Sub 'medislot-${Environment}-artifacts-${ArtifactBucketSuffix}-${AWS::AccountId}'
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
