@@ -443,7 +443,15 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-
+          - Sid: CreateApiGatewayServiceLinkedRole
+            Effect: Allow
+            Action:
+              - iam:CreateServiceLinkedRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ops.apigateway.amazonaws.com/AWSServiceRoleForAPIGateway
+            Condition:
+              StringLike:
+                iam:AWSServiceName: ops.apigateway.amazonaws.com
           - Sid: ConfigureApiGatewayCloudWatchAccount
             Effect: Allow
             Action:
@@ -531,6 +539,14 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Sid: ManageMediSlotEventSourceMappingTags
+            Effect: Allow
+            Action:
+              - lambda:TagResource
+              - lambda:UntagResource
+              - lambda:ListTags
+            Resource:
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:event-source-mapping:*
           - Sid: ManageMediSlotSnsTopics
             Effect: Allow
             Action:
