@@ -47,6 +47,13 @@ Resources:
               - cloudformation:ContinueUpdateRollback
             Resource:
               - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/medislot-${Environment}-*/*
+          - Sid: ManageMediSlotSSMParameterTags
+            Effect: Allow
+            Action:
+              - ssm:AddTagsToResource
+              - ssm:RemoveTagsFromResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/*
 
           # Allow CloudFormation to resolve the public latest Amazon Linux 2023 AMI parameter.
           - Sid: ReadAmazonLinuxLatestAmiParameter
