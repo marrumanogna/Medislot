@@ -396,23 +396,10 @@
     function showConflict(date, slots) {
       addBtn.disabled = slots.length > 0;
       if (!slots.length) { conflict.classList.add("hidden"); conflict.innerHTML = ""; return; }
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
       conflict.innerHTML = `<div class="alert alert-error" role="alert" style="margin-bottom:12px">Patients are booked on ${esc(prettyDate(date, { weekday: "short", year: "numeric", month: "short", day: "numeric" }))}. Cancel these slots on the Appointments page (every patient is refunded in full), then come back and add the blackout date.</div>
         <div class="table-wrap"><table><thead><tr><th>Time</th><th>Patient(s)</th><th></th></tr></thead><tbody>${slots.map((x) => `
           <tr><td><strong>${esc(x.slot_start)}–${esc(x.slot_end)}</strong></td><td>${x.patients.map(esc).join(", ")}</td>
           <td><a class="btn btn-ghost btn-sm" href="/doctor/appointments">Cancel on Appointments page</a></td></tr>`).join("")}</tbody></table></div>`;
-<<<<<<< HEAD
-=======
-=======
-      conflict.innerHTML = `<div class="alert alert-error" role="alert" style="margin-bottom:12px">Patients are booked on ${esc(prettyDate(date, { weekday: "short", year: "numeric", month: "short", day: "numeric" }))}. Cancel these slots (every patient is refunded in full), then you can add the blackout date.</div>
-        <div class="table-wrap"><table><thead><tr><th>Time</th><th>Patient(s)</th><th class="actions"><span class="sr-only">Actions</span></th></tr></thead><tbody>${slots.map((x) => `
-          <tr><td><strong>${esc(x.slot_start)}–${esc(x.slot_end)}</strong></td><td>${x.patients.map(esc).join(", ")}</td>
-          <td class="actions"><span class="row-actions"><button class="btn btn-danger btn-sm" type="button" data-cancel-slot="${esc(x.slot_id)}">Cancel slot</button></span></td></tr>`).join("")}</tbody></table></div>`;
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
       conflict.classList.remove("hidden");
     }
     async function checkDate() {
@@ -423,24 +410,7 @@
       if (r.ok && $("#bo-date").value === date) showConflict(date, r.data.booked_slots || []);
     }
     $("#bo-date").addEventListener("change", checkDate);
-<<<<<<< HEAD
     window.addEventListener("focus", checkDate);
-=======
-<<<<<<< HEAD
-    window.addEventListener("focus", checkDate);
-=======
-    conflict.addEventListener("click", async (e) => {
-      const cs = e.target.closest("button[data-cancel-slot]"); if (!cs) return;
-      if (!await confirmDialog("Cancel this slot?", "Every patient booked in it is refunded in full and notified.", "Cancel slot")) return;
-      await withBusy(cs, async () => {
-        const r = await api("POST", `doctor/slots/${encodeURIComponent(cs.dataset.cancelSlot)}/cancel`, {});
-        if (r.ok) toast(`Slot cancelled. ${r.data.cancelled_appointments} patient(s) refunded in full.`);
-        else toast(errorMessage(r, "Could not cancel the slot."), "error");
-        await checkDate();
-      });
-    });
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault(); err.classList.add("hidden");
@@ -554,45 +524,20 @@
     async function load() {
       const r = await api("GET", "doctor/appointments");
       if (!r.ok) { body.innerHTML = failBox(r, true); return; }
-<<<<<<< HEAD
       items = (r.data.items || []).filter((a) => a.status === "CONFIRMED");
       if (!items.length) { body.innerHTML = emptyState(ICON_CAL, "No open appointments", "Booked patients appear here. Finished visits move to History."); return; }
       const open = items.filter((a) => a.status === "CONFIRMED").sort((x, y) => x.slot_start.localeCompare(y.slot_start));
-=======
-<<<<<<< HEAD
-      items = (r.data.items || []).filter((a) => a.status === "CONFIRMED");
-      if (!items.length) { body.innerHTML = emptyState(ICON_CAL, "No open appointments", "Booked patients appear here. Finished visits move to History."); return; }
-      const open = items.filter((a) => a.status === "CONFIRMED").sort((x, y) => x.slot_start.localeCompare(y.slot_start));
-=======
-      items = (r.data.items || []).filter((a) => badge[a.status]);
-      if (!items.length) { body.innerHTML = emptyState(ICON_CAL, "No appointments yet", "When patients book your open slots, they'll show up here."); return; }
-      const open = items.filter((a) => a.status === "CONFIRMED").sort((x, y) => x.slot_start.localeCompare(y.slot_start));
-      const done = items.filter((a) => a.status !== "CONFIRMED").sort((x, y) => y.slot_start.localeCompare(x.slot_start));
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
       const now = Date.now();
       const row = (a) => {
         const started = new Date(a.slot_start).getTime() <= now;
         const [cls, label] = badge[a.status];
         const act = a.status === "CONFIRMED" && started
           ? `<button class="btn btn-primary btn-sm" data-outcome="COMPLETED" data-id="${a.appointment_id}">Patient checked</button> <button class="btn btn-danger btn-sm" data-outcome="NO_SHOW" data-id="${a.appointment_id}">No-show</button>`
-<<<<<<< HEAD
           : (a.status === "CONFIRMED" ? `<button class="btn btn-ghost btn-sm" data-cancel-slot="${esc(a.slot_id)}">Cancel slot</button>` : "");
-=======
-<<<<<<< HEAD
-          : (a.status === "CONFIRMED" ? `<button class="btn btn-ghost btn-sm" data-cancel-slot="${esc(a.slot_id)}">Cancel slot</button>` : "");
-=======
-          : (a.status === "CONFIRMED" ? '<span class="muted">Available after start</span>' : "");
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
         return `<tr><td><strong>${esc(prettyDate(a.slot_start.slice(0, 10), { weekday: "short", year: undefined }))}</strong> ${esc(a.slot_start.slice(11, 16))}</td>
           <td>${esc(a.patient_name || "Patient")}</td><td>${esc(a.consultation_type || "")}</td>
           <td><span class="badge ${cls}">${label}</span></td><td class="actions"><span class="row-actions">${act}</span></td></tr>`;
       };
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
       body.innerHTML = `<div class="table-wrap"><table><thead><tr><th>When</th><th>Patient</th><th>Type</th><th>Status</th><th class="actions"><span class="sr-only">Actions</span></th></tr></thead><tbody>${open.map(row).join("")}</tbody></table></div>`;
     }
 
@@ -607,15 +552,6 @@
         });
         return;
       }
-<<<<<<< HEAD
-=======
-=======
-      body.innerHTML = `<div class="table-wrap"><table><thead><tr><th>When</th><th>Patient</th><th>Type</th><th>Status</th><th class="actions"><span class="sr-only">Actions</span></th></tr></thead><tbody>${open.concat(done).map(row).join("")}</tbody></table></div>`;
-    }
-
-    body.addEventListener("click", async (e) => {
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
       const b = e.target.closest("button[data-outcome]"); if (!b) return;
       const noShow = b.dataset.outcome === "NO_SHOW";
       if (!await confirmDialog(noShow ? "Mark as no-show?" : "Mark patient as checked?", noShow ? "The patient did not attend. No refund is issued." : "The visit is recorded as completed.", noShow ? "No-show" : "Confirm")) return;
@@ -626,10 +562,6 @@
       });
     });
     load();
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
   };
 
   /* ---------- History and Refunds (separate pages) ---------- */
@@ -656,11 +588,6 @@
       <tr><td>${whenCell(a)}</td><td>${esc(a.patient_name || "Patient")}</td><td>${MS.money(a.fee)}</td>
       <td><strong>${MS.money(a.refund.amount)}</strong> (${esc(a.refund.percent)}%)</td>
       <td>${esc(a.cancel_reason || CLOSED[a.status][1])}</td></tr>`).join("")}</tbody></table></div>`;
-<<<<<<< HEAD
-=======
-=======
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
->>>>>>> origin/feature/m6-reschedule-waitlist-notifications
   };
 
   /* ---------- Settings ---------- */
