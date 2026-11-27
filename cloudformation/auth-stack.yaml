@@ -41,8 +41,11 @@ Resources:
             Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/medislot-${Environment}-*:*'
           - Effect: Allow
             Action: [ec2:CreateNetworkInterface, ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface, ec2:AssignPrivateIpAddresses, ec2:UnassignPrivateIpAddresses]
-            Resource: '*'
-            
+            Resource: '*'            # ENI actions cannot be scoped to a resource ARN (VPC Lambdas)
+          - Effect: Allow
+            Action: [xray:PutTraceSegments, xray:PutTelemetryRecords]
+            Resource: '*'            # X-Ray write actions do not support resource-level permissions
+
   RegisterRole:
     Type: AWS::IAM::Role
     Properties:
@@ -55,7 +58,7 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - {Effect: Allow, Action: [ssm:GetParameter], Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/*'}
-              - {Effect: Allow, Action: [kms:Decrypt], Resource: '*'}
+              - {Effect: Allow, Action: [kms:Decrypt], Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*', Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}}
 
   DoctorRegisterRole:
     Type: AWS::IAM::Role
@@ -69,7 +72,7 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - {Effect: Allow, Action: [ssm:GetParameter], Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/*'}
-              - {Effect: Allow, Action: [kms:Decrypt], Resource: '*'}
+              - {Effect: Allow, Action: [kms:Decrypt], Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*', Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}}
   LoginRole:
     Type: AWS::IAM::Role
     Properties:
@@ -83,7 +86,7 @@ Resources:
             Statement:
               - {Effect: Allow, Action: [ssm:GetParameter], Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/*'}
               - {Effect: Allow, Action: [dynamodb:GetItem, dynamodb:PutItem], Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/MediSlot-${Environment}-AuthTokens'}
-              - {Effect: Allow, Action: [kms:Decrypt], Resource: '*'}
+              - {Effect: Allow, Action: [kms:Decrypt], Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*', Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}}
   RefreshRole:
     Type: AWS::IAM::Role
     Properties:
@@ -97,7 +100,7 @@ Resources:
             Statement:
               - {Effect: Allow, Action: [ssm:GetParameter], Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/*'}
               - {Effect: Allow, Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem], Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/MediSlot-${Environment}-AuthTokens'}
-              - {Effect: Allow, Action: [kms:Decrypt], Resource: '*'}
+              - {Effect: Allow, Action: [kms:Decrypt], Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*', Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}}
   LogoutRole:
     Type: AWS::IAM::Role
     Properties:
@@ -111,7 +114,7 @@ Resources:
             Statement:
               - {Effect: Allow, Action: [ssm:GetParameter], Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/*'}
               - {Effect: Allow, Action: [dynamodb:PutItem, dynamodb:UpdateItem], Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/MediSlot-${Environment}-AuthTokens'}
-              - {Effect: Allow, Action: [kms:Decrypt], Resource: '*'}
+              - {Effect: Allow, Action: [kms:Decrypt], Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*', Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}}
   AuthorizerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -125,12 +128,13 @@ Resources:
             Statement:
               - {Effect: Allow, Action: [ssm:GetParameter], Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/auth/jwt-secret'}
               - {Effect: Allow, Action: [dynamodb:GetItem], Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/MediSlot-${Environment}-AuthTokens'}
-              - {Effect: Allow, Action: [kms:Decrypt], Resource: '*'}
+              - {Effect: Allow, Action: [kms:Decrypt], Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*', Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}}
 
   RegisterFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-register'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt RegisterRole.Arn
@@ -148,6 +152,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-register-doctor'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorRegisterRole.Arn
@@ -164,6 +169,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-login'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt LoginRole.Arn
@@ -180,6 +186,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-refresh'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt RefreshRole.Arn
@@ -196,6 +203,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-logout'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt LogoutRole.Arn
@@ -212,6 +220,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-authorizer'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt AuthorizerRole.Arn
@@ -251,7 +260,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - kms:Decrypt
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
 
   DoctorProfileRole:
     Type: AWS::IAM::Role
@@ -281,7 +291,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - kms:Decrypt
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
 
               - Effect: Allow
                 Action:
@@ -301,11 +312,12 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - {Effect: Allow, Action: [ssm:GetParameter], Resource: [!Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/db/*', !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/auth/jwt-secret']}
-              - {Effect: Allow, Action: [kms:Decrypt], Resource: '*'}
+              - {Effect: Allow, Action: [kms:Decrypt], Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*', Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}}
   RdsConnectionCheckFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-rds-connection-check'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt RdsCheckRole.Arn
@@ -322,6 +334,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-doctor-profile'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorProfileRole.Arn
@@ -347,6 +360,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-consultation-types'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorProfileRole.Arn
@@ -372,6 +386,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-availability-patterns'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorProfileRole.Arn
@@ -396,6 +411,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-blackout-dates'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorProfileRole.Arn
@@ -420,6 +436,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-slot-materialiser'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorProfileRole.Arn
@@ -444,6 +461,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-doctor-schedule'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorProfileRole.Arn
@@ -468,6 +486,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-doctor-slot-management'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorSlotManagementRole.Arn
@@ -518,7 +537,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - kms:Decrypt
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
 
   DoctorDiscoveryRole:
     Type: AWS::IAM::Role
@@ -548,7 +568,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - kms:Decrypt
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
               - Effect: Allow
                 Action:
                   - s3:GetObject
@@ -582,12 +603,14 @@ Resources:
               - Effect: Allow
                 Action:
                   - kms:Decrypt
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
 
   PatientProfileFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-patient-profile'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt PatientProfileRole.Arn
@@ -613,6 +636,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-doctor-discovery'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DoctorDiscoveryRole.Arn
@@ -639,6 +663,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-db-migrate'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt DbMigrateRole.Arn
@@ -689,7 +714,8 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/testing/*'
               - Effect: Allow
                 Action: [kms:Decrypt]
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
               # Optimistic concurrency on the slot record and the idempotency store.
               - Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem]
@@ -710,6 +736,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-appointments'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt AppointmentsRole.Arn
@@ -742,6 +769,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-protected-test'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: index.handler
       Role: !GetAtt ProtectedFunctionRole.Arn
@@ -1805,7 +1833,8 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/booking/*'
               - Effect: Allow
                 Action: [kms:Decrypt]
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
               - Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
                 Resource:
@@ -1860,7 +1889,8 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/medislot/${Environment}/noshow/*'
               - Effect: Allow
                 Action: [kms:Decrypt]
-                Resource: '*'
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+                Condition: {StringEquals: {'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com'}}
               - Effect: Allow
                 Action: [dynamodb:PutItem, dynamodb:DeleteItem]
                 Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/MediSlot-${Environment}-NotificationLog'
@@ -1880,10 +1910,18 @@ Resources:
               - Effect: Allow
                 Action: [lambda:InvokeFunction]
                 Resource: !GetAtt AppointmentsFunction.Arn
+        - PolicyName: RescheduleXRay
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules, xray:GetSamplingTargets]
+                Resource: '*'        # X-Ray actions do not support resource-level permissions
   WaitlistFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-waitlist'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt WaitlistRole.Arn
@@ -1909,6 +1947,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-notifications'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt NotificationsRole.Arn
@@ -1926,6 +1965,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub 'medislot-${Environment}-scheduled-jobs'
+      TracingConfig: {Mode: Active}   # X-Ray
       Runtime: python3.12
       Handler: lambda_function.handler
       Role: !GetAtt ScheduledJobsRole.Arn
@@ -2018,6 +2058,7 @@ Resources:
     Properties:
       StateMachineName: !Sub 'medislot-${Environment}-reschedule'
       StateMachineType: STANDARD
+      TracingConfiguration: {Enabled: true}   # X-Ray
       RoleArn: !GetAtt RescheduleStateMachineRole.Arn
       Definition:
         Comment: Reschedule saga - claim target, move appointment, release original, compensate on failure.
@@ -2300,6 +2341,7 @@ Resources:
       RestApiId: !Ref RestApi
       DeploymentId: !Ref ApiDeploymentM6
       StageName: !Ref Environment
+      TracingEnabled: true   # X-Ray
       MethodSettings:
         - ResourcePath: '/*'
           HttpMethod: '*'

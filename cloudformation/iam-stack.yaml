@@ -589,6 +589,41 @@ Resources:
               - lambda:ListEventSourceMappings
             Resource: "*"
 
+  # Observability: CloudWatch dashboard/alarms, AWS Budgets and CloudFormation drift detection.
+  MediSlotGitHubActionsObservabilityPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub MediSlot-${Environment}-GitHubActionsObservabilityPolicy
+      Roles:
+        - !Ref GitHubActionsRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ManageMediSlotDashboards
+            Effect: Allow
+            Action: [cloudwatch:PutDashboard, cloudwatch:DeleteDashboards, cloudwatch:GetDashboard]
+            Resource: !Sub arn:${AWS::Partition}:cloudwatch::${AWS::AccountId}:dashboard/medislot-${Environment}-*
+          - Sid: ManageMediSlotAlarms
+            Effect: Allow
+            Action: [cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:TagResource, cloudwatch:UntagResource, cloudwatch:ListTagsForResource]
+            Resource: !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:medislot-${Environment}-*
+          - Sid: DescribeAlarms
+            Effect: Allow
+            Action: [cloudwatch:DescribeAlarms]
+            Resource: "*"   # Describe actions do not support resource-level permissions
+          - Sid: ManageMediSlotBudgets
+            Effect: Allow
+            Action: [budgets:ViewBudget, budgets:ModifyBudget, budgets:TagResource, budgets:UntagResource, budgets:ListTagsForResource]
+            Resource: !Sub arn:${AWS::Partition}:budgets::${AWS::AccountId}:budget/medislot-${Environment}-*
+          - Sid: DriftDetectionOnMediSlotStacks
+            Effect: Allow
+            Action: [cloudformation:DetectStackDrift, cloudformation:DescribeStackResourceDrifts, cloudformation:DescribeStackResources]
+            Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/medislot-${Environment}-*/*
+          - Sid: ReadDriftStatus
+            Effect: Allow
+            Action: [cloudformation:DescribeStackDriftDetectionStatus]
+            Resource: "*"   # status lookups are by detection id, not by stack
+
 Outputs:
   DeploymentRoleName:
     Description: GitHub Actions deployment role receiving the policies.

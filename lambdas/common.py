@@ -3,6 +3,13 @@ from functools import lru_cache
 from botocore.exceptions import ClientError
 
 
+# X-Ray: records a sub-segment for every AWS SDK and MySQL call. Silently skipped when the SDK is not packaged (unit tests).
+try:
+    from aws_xray_sdk.core import patch as _xray_patch
+    _xray_patch(("botocore", "pymysql"))
+except Exception:  # pragma: no cover
+    pass
+
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 

@@ -145,6 +145,11 @@ cmd = [
     "--change-set-name", name,
     "--change-set-type", kind,
     "--capabilities", "CAPABILITY_NAMED_IAM",
+    # Stack tags propagate to every taggable resource -> cost allocation tags for AWS Budgets / Cost Explorer.
+    "--tags",
+    "Key=Project,Value=MediSlot",
+    f"Key=Environment,Value={next((p['ParameterValue'] for p in parameters if p['ParameterKey'] == 'Environment'), 'dev')}",
+    "Key=ManagedBy,Value=CloudFormation",
     "--parameters"
 ] + [
     f"ParameterKey={p['ParameterKey']},ParameterValue={p['ParameterValue']}"
