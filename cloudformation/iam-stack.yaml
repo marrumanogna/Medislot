@@ -235,6 +235,7 @@ Resources:
               - ec2:CreateVpcEndpoint
               - ec2:DeleteVpcEndpoints
               - ec2:DescribeVpcEndpoints
+              - ec2:ModifyVpcEndpoint
               - ec2:DescribeVpcEndpointServices
               - ec2:DescribeAvailabilityZones
               - ec2:DescribePrefixLists
@@ -251,6 +252,15 @@ Resources:
             Condition:
               StringEquals:
                 aws:RequestedRegion: !Ref AWS::Region
+          - Sid: AllowModifyMediSlotVpcEndpoints
+            Effect: Allow
+            Action:
+              - ec2:ModifyVpcEndpoint
+            Resource:
+              - arn:aws:ec2:us-east-1:195710498029:vpc-endpoint/*
+              - arn:aws:ec2:us-east-1:195710498029:route-table/*
+              - arn:aws:ec2:us-east-1:195710498029:security-group/*
+              - arn:aws:ec2:us-east-1:195710498029:subnet/*
           - Sid: ManageMediSlotDashboardInstanceState
             Effect: Allow
             Action:
