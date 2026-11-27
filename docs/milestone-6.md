@@ -60,6 +60,10 @@ patient -> patient+doctor, cancelled by doctor -> patient, offer issued/expired 
 * `POST /doctor/appointments/{appointment_id}/outcome` `{"outcome": "COMPLETED" | "NO_SHOW"}` (DOCTOR). Allowed once the slot has started; repeat calls are replay-safe; NO_SHOW writes a 0% refund row. Other doctors get 404.
 * `POST/PUT /doctor/blackout-dates` returns 409 `BLACKOUT_HAS_BOOKINGS` plus `booked_slots` while confirmed patients exist on that IST day. The doctor cancels those slots (`/doctor/slots/{id}/cancel`, full refund, `AppointmentCancelled` notifications), then the blackout is accepted. `GET /doctor/blackout-dates?check_date=YYYY-MM-DD` lists those slots for the UI.
 * Dashboard stack: new `SshCidr` parameter (default = EC2 Instance Connect range for us-east-1) opens port 22; empty value removes the rule (Session Manager only).
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+>>>>>>> origin/feature/m6-reschedule-waitlist-notifications
 
 ## Update 26 Nov
 * Availability PATCH accepts MySQL 0/1 for `is_active` (editing hours no longer fails with "is_active must be true or false").
@@ -74,3 +78,8 @@ patient -> patient+doctor, cancelled by doctor -> patient, offer issued/expired 
 * Doctor portal: Appointments shows only open (confirmed) appointments and is the only place to cancel a slot or mark checked / no-show; History and Refunds are separate pages.
 * Notification e-mails are plain-text messages (greeting, details table, sign-off) sent through SNS `MessageStructure=json`; programmatic subscribers still receive the JSON payload.
 * Every Lambda logs START / END (request id, route, role, user, status, duration) via `common.logged`, plus stack traces on failure.
+<<<<<<< HEAD
+=======
+=======
+>>>>>>> origin/feature/m6-reschedule-waitlist-notifications
+>>>>>>> origin/feature/m6-reschedule-waitlist-notifications

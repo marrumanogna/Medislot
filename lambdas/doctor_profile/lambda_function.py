@@ -1,5 +1,7 @@
 import os
 import json
+import sys
+import time as _time
 import uuid
 import logging
 from decimal import Decimal, InvalidOperation
@@ -13,6 +15,18 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+
+_ctx = {"cid": None, "user_id": None}
+
+
+def log_step(name, **fields):
+    """Structured INFO log line (project `emit` format) with the correlation id and doctor id.
+    Logs field NAMES and IDs only: never profile values, licence numbers, bio text or presigned URLs."""
+    try:
+        emit("info", name, _ctx["cid"], userId=_ctx["user_id"], **fields)
+    except Exception:
+        pass
+
 
 MAX_PHOTO_BYTES = 5 * 1024 * 1024  # 5mb
 PHOTO_TYPES = {
@@ -253,7 +267,7 @@ def decode_json_columns(profile):
     return profile
 
 
-def handler(event, context):
+def _handle(event, context):
     logger.info("Doctor Profile Lambda execution started")
 
     cid = correlation(event)
@@ -264,6 +278,9 @@ def handler(event, context):
         "Request received: method=%s, correlation_id=%s",
         method, cid
     )
+    _ctx["cid"], _ctx["user_id"] = cid, (str(user_id) if user_id is not None else None)
+    log_step("doctor_profile_request", method=method, path=event.get("path"), resource=event.get("resource"),
+             authenticated=user_id is not None, request_id=(event.get("requestContext") or {}).get("requestId"))
 
     if user_id is None:
         logger.warning("Unauthorized doctor profile request")
@@ -298,6 +315,9 @@ def handler(event, context):
     if method in ("POST", "PUT", "PATCH") and not is_photo_upload_route:
         logger.info("Validating doctor profile data")
         values, validation_error = validate_profile_data(data, method, cid)
+        log_step("doctor_profile_validation", submitted_fields=sorted(data),
+                 validated_fields=sorted(values or {}), passed=validation_error is None,
+                 validation_status=(validation_error or {}).get("statusCode"))
         if validation_error:
             logger.warning("Doctor profile data validation failed")
             return validation_error
@@ -305,10 +325,12 @@ def handler(event, context):
     conn = None
 
     try:
+        _t_db = _time.time()
         c = config()
         conn = dbconn(c)
 
         logger.info("Database connection established")
+        log_step("doctor_profile_db_connected", ms=int((_time.time() - _t_db) * 1000))
 
         with conn.cursor() as cur:
             cur.execute(
@@ -332,6 +354,7 @@ def handler(event, context):
                 return error_response(404, "Active doctor account not found", cid)
 
             logger.info("Active doctor account verified")
+            log_step("doctor_profile_account_verified", doctor_account_found=True)
 
             if is_photo_upload_route:
                 logger.info("Processing doctor photo upload URL request")
@@ -371,6 +394,8 @@ def handler(event, context):
                     )
 
                 photo_key = f"doctors/{user_id}/{uuid.uuid4().hex}.{extension}"
+                log_step("doctor_photo_upload_url_requested", content_type=content_type,
+                         content_length=content_length, bucket_configured=bool(bucket), photo_key=photo_key)
                 upload_url = s3.generate_presigned_url(
                     "put_object",
                     Params={
@@ -383,6 +408,7 @@ def handler(event, context):
                 )
 
                 logger.info("Doctor photo upload URL generated successfully")
+                log_step("doctor_photo_upload_url_generated", photo_key=photo_key, expires_in_seconds=300)
 
                 conn.rollback()
                 return response(200, {
@@ -405,6 +431,8 @@ def handler(event, context):
                     (user_id,),
                 )
                 existing = cur.fetchone()
+                log_step("doctor_profile_delete_lookup", profile_found=existing is not None,
+                         has_photo=bool(existing and existing.get("photo_key")))
 
                 if not existing:
                     logger.warning("Doctor profile not found for deletion")
@@ -420,6 +448,7 @@ def handler(event, context):
                 conn.commit()
 
                 logger.info("Doctor profile deleted from database")
+                log_step("doctor_profile_deleted_from_db", had_photo=bool(photo_key))
 
                 if photo_key and os.environ.get("DOCTOR_PHOTOS_BUCKET"):
                     try:
@@ -428,6 +457,7 @@ def handler(event, context):
                             Key=photo_key,
                         )
                         logger.info("Doctor profile photo deleted from S3")
+                        log_step("doctor_profile_photo_deleted_from_s3", photo_key=photo_key)
                     except Exception:
                         logger.exception("Doctor profile photo cleanup failed")
                         emit(
@@ -491,6 +521,8 @@ def handler(event, context):
                     )
 
                 logger.info("Uploaded doctor photo validation successful")
+                log_step("doctor_photo_validated", photo_key=photo_key,
+                         size_bytes=photo_head.get("ContentLength"), content_type=photo_head.get("ContentType"))
 
             if method == "GET":
                 logger.info("Fetching doctor profile")
@@ -519,6 +551,7 @@ def handler(event, context):
                     (user_id,),
                 )
                 profile = cur.fetchone()
+                log_step("doctor_profile_get_lookup", profile_found=profile is not None)
 
                 if not profile:
                     logger.warning("Doctor profile not found")
@@ -565,6 +598,9 @@ def handler(event, context):
                     )
 
                 logger.info("Doctor profile fetched successfully")
+                log_step("doctor_profile_fetched", has_photo=bool(result.get("photo_key")),
+                         photo_url_generated=bool(result.get("photo_url")),
+                         has_fee=result.get("consultation_fee") is not None)
 
                 conn.rollback()
                 return response(200, result)
@@ -576,6 +612,7 @@ def handler(event, context):
                 (user_id,),
             )
             exists = cur.fetchone() is not None
+            log_step("doctor_profile_exists_check", method=method, profile_exists=exists)
 
             if method == "POST" and exists:
                 logger.warning("Doctor profile already exists")
@@ -598,6 +635,7 @@ def handler(event, context):
             if method == "POST":
                 logger.info("Creating new doctor profile")
 
+                log_step("doctor_profile_insert", columns=sorted(values))
                 columns = ["user_id", "full_name", *values.keys()]
                 params = [user_id, doctor["full_name"], *values.values()]
                 placeholders = ", ".join(["%s"] * len(columns))
@@ -617,6 +655,7 @@ def handler(event, context):
                         400, "No profile fields supplied", cid
                     )
 
+                log_step("doctor_profile_update", method=method, fields=sorted(values))
                 assignments = ", ".join(
                     f"{field} = %s" for field in values
                 )
@@ -629,6 +668,7 @@ def handler(event, context):
         conn.commit()
 
         logger.info("Doctor profile saved successfully")
+        log_step("doctor_profile_committed", method=method, fields=sorted(values))
 
         emit(
             "info",
@@ -658,6 +698,8 @@ def handler(event, context):
                 pass
 
         logger.exception("doctor_profile_failed")
+        _err = sys.exc_info()[1]
+        log_step("doctor_profile_error", method=method, error_type=type(_err).__name__, error=str(_err)[:300])
 
         emit(
             "error",
@@ -673,3 +715,19 @@ def handler(event, context):
         if conn is not None:
             conn.close()
             logger.info("Database connection closed")
+
+
+def handler(event, context):
+    """Logs one start line and one end line (status code and duration) around every exit path."""
+    started = _time.time()
+    result = None
+    try:
+        result = _handle(event, context)
+        return result
+    finally:
+        try:
+            status = (result or {}).get("statusCode")
+            log_step("doctor_profile_request_end", status=status,
+                     duration_ms=int((_time.time() - started) * 1000))
+        except Exception:
+            pass
