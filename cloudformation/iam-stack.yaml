@@ -564,14 +564,6 @@ Resources:
               - sns:ListSubscriptionsByTopic
             Resource:
               - !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:medislot-${Environment}-*
-          - Sid: ManageMediSlotEventSourceMappingTags
-            Effect: Allow
-            Action:
-              - lambda:TagResource
-              - lambda:UntagResource
-              - lambda:ListTags
-            Resource:
-              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:event-source-mapping:*
           - Sid: ManageMediSlotSqsQueues
             Effect: Allow
             Action:
