@@ -68,6 +68,11 @@ Resources:
           - Sid: ReadAndValidateMediSlotCloudFormation
             Effect: Allow
             Action:
+              - cloudformation:DetectStackDrift
+              - cloudformation:DetectStackResourceDrift
+              - cloudformation:DescribeStackDriftDetectionStatus
+              - cloudformation:DescribeStackResourceDrifts
+              - cloudformation:BatchDescribeTypeConfigurations
               - cloudformation:DescribeStacks
               - cloudformation:ListStacks
               - cloudformation:ValidateTemplate
