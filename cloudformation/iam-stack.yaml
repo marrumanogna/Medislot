@@ -34,6 +34,8 @@ Resources:
           - Sid: ManageMediSlotCloudFormationStacks
             Effect: Allow
             Action:
+              - iam:ListEntitiesForPolicy
+              - ssm:ListTagsForResource
               - cloudformation:CreateChangeSet
               - cloudformation:DescribeChangeSet
               - cloudformation:ExecuteChangeSet
@@ -260,6 +262,7 @@ Resources:
               - ec2:DescribeImages
               - ec2:DescribeKeyPairs
               - ec2:DescribeIamInstanceProfileAssociations
+              - ec2:DescribeNetworkInterfaces
             Resource: "*"
             Condition:
               StringEquals:
