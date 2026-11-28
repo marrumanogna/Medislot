@@ -28,16 +28,24 @@ def utcnow():
 
 
 def ssm_int(name):
+    """All four thresholds come from one batched SSM call and are cached for 10 minutes (was 1 call per name per run)."""
     hit = _cache.get(name)
-    if hit and time.time() - hit[0] < 60:
+    if hit and time.time() - hit[0] < 600:
         return hit[1]
+    now, prefix = time.time(), f"/medislot/{ENV}/"
+    found = {}
     try:
         from common import ssm
-        value = int(ssm.get_parameter(Name=f"/medislot/{ENV}/{name}")["Parameter"]["Value"])
+        for p in ssm.get_parameters(Names=[prefix + k for k in DEFAULTS])["Parameters"]:
+            found[p["Name"][len(prefix):]] = p["Value"]
     except Exception:
-        value = DEFAULTS[name]
-    _cache[name] = (time.time(), value)
-    return value
+        pass
+    for k, default in DEFAULTS.items():
+        try:
+            _cache[k] = (now, int(found[k]))
+        except (KeyError, ValueError):
+            _cache[k] = (now, default)
+    return _cache[name][1]
 
 
 def metric(name, value=1, unit="Count"):
@@ -116,10 +124,11 @@ def run_no_show(conn, cur, now=None, grace=None):
                         (a["appointment_id"], a["patient_id"], a["fee"]))
             marked += 1
     conn.commit()
-    cur.execute("SELECT SUM(status = 'NO_SHOW') AS ns, SUM(status IN ('NO_SHOW', 'COMPLETED')) AS done FROM appointments")
-    row = cur.fetchone() or {}
-    if row.get("done"):
-        metric("NoShowRate", round(100.0 * float(row["ns"] or 0) / float(row["done"]), 2), "Percent")
+    if marked:  # the table-wide rate can only change when something was marked, so skip the aggregate on empty runs
+        cur.execute("SELECT SUM(status = 'NO_SHOW') AS ns, SUM(status IN ('NO_SHOW', 'COMPLETED')) AS done FROM appointments")
+        row = cur.fetchone() or {}
+        if row.get("done"):
+            metric("NoShowRate", round(100.0 * float(row["ns"] or 0) / float(row["done"]), 2), "Percent")
     return marked
 
 
