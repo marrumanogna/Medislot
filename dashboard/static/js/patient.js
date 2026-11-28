@@ -1,7 +1,7 @@
 
 /* Patient portal (Milestone 5: booking, cancellation and refunds on top of search).
  * Live endpoints: patient/profile, doctors, doctors/filters, doctors/{id}, doctors/{id}/slots.
- * Milestone 5: POST appointments, GET appointments, POST appointments/{id}/cancel, GET patient/refunds.
+ * Milestone 5: booking, cancellation and refunds; Milestone 6: PATCH appointments/{id} for reschedule saga.
  */
 (() => {
   const { api, toast, esc, $, errorMessage, time12, money, isoDateIn, addDays, prettyDate, withBusy, initials } = MS;
@@ -25,11 +25,13 @@
   const isOpen = (a) => ["CONFIRMED", "BOOKED"].includes(String(a.status || "CONFIRMED"));
   const isUpcoming = (a) => isOpen(a) && (!startOf(a) || new Date(startOf(a)).getTime() >= Date.now());
   const refundLine = (a) => (a.refund ? `<small class="muted">Refund: ${esc(money(a.refund.amount))} (${esc(a.refund.percent)}%)</small>` : "");
-  const apptCard = (a) => {
+  const apptCard = (a, showReschedule = false) => {
     const status = String(pick(a, "status") || "CONFIRMED");
     const cls = (status === "CONFIRMED" || status === "BOOKED") ? "badge-blue" : status === "COMPLETED" ? "badge-green" : status === "NO_SHOW" ? "badge-amber" : "badge-grey";
-    return `<div class="tl-row" style="grid-template-columns:1fr auto"><div class="tl-body"><strong>${esc(pick(a, "doctorName", "doctor_name") || "Appointment")}</strong><span>${esc(fmtWhen(startOf(a)))}${pick(a, "consultationType", "consultation_type") ? " · " + esc(pick(a, "consultationType", "consultation_type")) : ""}</span></div><span style="display:flex;gap:8px;align-items:center"><span class="badge ${cls}">${esc(status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()))}</span>${isUpcoming(a) ? `<button class="btn btn-ghost btn-sm" type="button" data-cancel="${esc(a.appointment_id)}">Cancel</button>` : ""}</span></div>`
-      .replace("</span></div><span", "</span>" + refundLine(a) + "</div><span");
+    const actions = isUpcoming(a)
+      ? `${showReschedule ? `<button class="btn btn-primary btn-sm" type="button" data-reschedule="${esc(a.appointment_id)}">Reschedule</button>` : ""}<button class="btn btn-ghost btn-sm" type="button" data-cancel="${esc(a.appointment_id)}">Cancel</button>`
+      : "";
+    return `<div class="tl-row" style="grid-template-columns:1fr auto"><div class="tl-body"><strong>${esc(pick(a, "doctorName", "doctor_name") || "Appointment")}</strong><span>${esc(fmtWhen(startOf(a)))}${pick(a, "consultationType", "consultation_type") ? " · " + esc(pick(a, "consultationType", "consultation_type")) : ""}</span>${refundLine(a)}</div><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="badge ${cls}">${esc(status.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase()))}</span>${actions}</span></div>`;
   };
 
   const pages = {};
@@ -52,25 +54,198 @@
   pages.appointments = async () => {
     const r = await api("GET", EP.appointments);
     if (!r.ok) { $("#upcoming").innerHTML = problem(r); return; }
+
     const all = listOf(r.data);
-    const now = new Date().toISOString().slice(0, 16);
     const up = all.filter((a) => isUpcoming(a)).sort((a, b) => String(startOf(a)).localeCompare(String(startOf(b))));
     const past = all.filter((a) => !up.includes(a)).sort((a, b) => String(startOf(b)).localeCompare(String(startOf(a))));
-    $("#upcoming").innerHTML = up.length ? `<div class="timeline">${up.map(apptCard).join("")}</div>` : empty(ICON_CAL, "No upcoming appointments", "Book a time with a doctor and it will show up here.", '<a class="btn btn-primary btn-sm" href="/patient/doctors">Find a doctor</a>');
+    $("#upcoming").innerHTML = up.length
+      ? `<div class="timeline">${up.map((a) => apptCard(a, true)).join("")}</div>`
+      : empty(ICON_CAL, "No upcoming appointments", "Book a time with a doctor and it will show up here.", '<a class="btn btn-primary btn-sm" href="/patient/doctors">Find a doctor</a>');
+
+    // Recreate the dialog on each appointment-list render so its handlers use the latest data.
+    document.getElementById("reschedule-dialog")?.remove();
+    document.body.insertAdjacentHTML("beforeend", `
+      <dialog id="reschedule-dialog">
+        <div class="dlg">
+          <div class="dlg-head">
+            <h2>Reschedule appointment</h2>
+            <p id="rs-summary">Choose another available slot.</p>
+          </div>
+          <div class="dlg-body">
+            <div class="range-bar">
+              <label for="rs-date"><strong>Choose date</strong></label>
+              <input class="input" id="rs-date" type="date">
+            </div>
+            <div id="rs-slots"><p class="muted">Choose a date to view available slots.</p></div>
+            <p id="rs-selected" class="muted" aria-live="polite"></p>
+            <p id="rs-message" class="muted" role="status" aria-live="polite"></p>
+          </div>
+          <div class="dlg-foot">
+            <button class="btn btn-ghost" id="rs-close" type="button">Close</button>
+            <button class="btn btn-primary" id="rs-confirm" type="button" disabled>Confirm reschedule</button>
+          </div>
+        </div>
+      </dialog>`);
+
+    const rsDialog = $("#reschedule-dialog");
+    const rsDate = $("#rs-date", rsDialog);
+    const rsSlotsHost = $("#rs-slots", rsDialog);
+    const rsSelected = $("#rs-selected", rsDialog);
+    const rsMessage = $("#rs-message", rsDialog);
+    const rsConfirm = $("#rs-confirm", rsDialog);
+    const rsState = { appointment: null, from: null, slots: [], chosen: null, pending: false };
+    const pendingRescheduleIds = new Set();
+    const tz = "Asia/Kolkata";
+    const seatLabel = (n) => `${n} seat${n === 1 ? "" : "s"} free`;
+
+    function renderRescheduleSlots(items) {
+      rsState.slots = items;
+      rsState.chosen = null;
+      rsSelected.textContent = "";
+      rsConfirm.disabled = true;
+
+      if (!items.length) {
+        return empty(ICON_CAL, "No alternative slots available", "Try another date. Only free slots for this doctor and consultation type are shown.");
+      }
+
+      const byDay = {};
+      items.forEach((slot, index) => (byDay[slot.date] ||= []).push([slot, index]));
+      return Object.keys(byDay).sort().map((day) => `
+        <div class="slot-day">
+          <div class="slot-day-head"><strong>${esc(prettyDate(day, { year: undefined }))}</strong></div>
+          <div class="slot-pick" role="group" aria-label="Available slots on ${esc(day)}">
+            ${byDay[day].map(([slot, index]) => `
+              <button type="button" data-rs-slot="${index}" aria-pressed="false">
+                <span>${esc(time12(slot.slot_start.slice(11, 16)))}</span>
+                <small>${esc(seatLabel(Number(slot.seats_free)))}</small>
+              </button>`).join("")}
+          </div>
+        </div>`).join("");
+    }
+
+    async function loadRescheduleSlots() {
+      if (!rsState.appointment) return;
+      rsSlotsHost.innerHTML = '<div class="skeleton"></div><div class="skeleton" style="width:60%"></div>';
+      rsState.chosen = null;
+      rsConfirm.disabled = true;
+      rsSelected.textContent = "";
+
+      const appointment = rsState.appointment;
+      const result = await api(
+        "GET",
+        `${EP.doctors}/${encodeURIComponent(appointment.doctor_id)}/slots`,
+        undefined,
+        { from: rsState.from, to: addDays(rsState.from, 6) }
+      );
+
+      if (!result.ok) {
+        rsSlotsHost.innerHTML = problem(result);
+        return;
+      }
+
+      const currentType = String(appointment.consultation_type || "").trim().toLowerCase();
+      const alternatives = listOf(result.data).filter((slot) =>
+        Number(slot.slot_id) !== Number(appointment.slot_id) &&
+        Number(slot.seats_free) > 0 &&
+        String(slot.consultation_type || "").trim().toLowerCase() === currentType
+      );
+      rsSlotsHost.innerHTML = renderRescheduleSlots(alternatives);
+    }
+
+    function openReschedule(appointment) {
+      if (pendingRescheduleIds.has(String(appointment.appointment_id))) {
+        toast("This appointment's reschedule is already processing. Please check My appointments shortly.");
+        return;
+      }
+      if (!appointment.doctor_id) {
+        toast("The appointment response is missing the doctor ID, so slots cannot be loaded.", "error");
+        return;
+      }
+      rsState.appointment = appointment;
+      rsState.from = isoDateIn(tz);
+      rsState.slots = [];
+      rsState.chosen = null;
+      rsState.pending = false;
+      rsDate.min = rsState.from;
+      rsDate.value = rsState.from;
+      $("#rs-summary", rsDialog).textContent = `${appointment.doctor_name || "Doctor"} · ${appointment.consultation_type || "Consultation"} · Current: ${fmtWhen(startOf(appointment))}`;
+      rsSelected.textContent = "";
+      rsMessage.textContent = "";
+      rsConfirm.disabled = true;
+      rsDialog.showModal();
+      loadRescheduleSlots();
+    }
+
+    $("#rs-close", rsDialog).addEventListener("click", () => rsDialog.close());
+    rsDate.addEventListener("change", () => {
+      if (!rsDate.value) return;
+      const today = isoDateIn(tz);
+      rsState.from = rsDate.value < today ? today : rsDate.value;
+      rsDate.value = rsState.from;
+      loadRescheduleSlots();
+    });
+    rsSlotsHost.addEventListener("click", (e) => {
+      const button = e.target.closest("button[data-rs-slot]");
+      if (!button) return;
+      rsState.chosen = rsState.slots[Number(button.dataset.rsSlot)];
+      rsSlotsHost.querySelectorAll("button[data-rs-slot]").forEach((item) =>
+        item.setAttribute("aria-pressed", String(item === button))
+      );
+      rsSelected.textContent = `Selected: ${fmtWhen(rsState.chosen.slot_start)} · ${rsState.chosen.consultation_type}`;
+      rsConfirm.disabled = false;
+    });
+
+    rsConfirm.addEventListener("click", async (e) => {
+      if (rsState.pending) return;
+      await withBusy(e.currentTarget, async () => {
+        if (!rsState.appointment || !rsState.chosen) return;
+        const appointmentId = String(rsState.appointment.appointment_id);
+        const result = await api(
+          "PATCH",
+          `${EP.appointments}/${encodeURIComponent(appointmentId)}`,
+          { slot_id: Number(rsState.chosen.slot_id) }
+        );
+
+        if (!result.ok) {
+          toast(errorMessage(result, "Could not reschedule this appointment."), "error");
+          return;
+        }
+
+        if (result.status === 202 || result.data?.code === "RESCHEDULE_PENDING") {
+          rsState.pending = true;
+          pendingRescheduleIds.add(appointmentId);
+          rsMessage.textContent = "Your reschedule request is still processing. Your appointment will update when the Step Functions workflow finishes.";
+          toast("Reschedule is still processing. Please check My appointments again shortly.");
+          return;
+        }
+
+        rsDialog.close();
+        toast("Appointment rescheduled successfully.");
+        await pages.appointments();
+      });
+      if (rsState.pending) e.currentTarget.disabled = true;
+    });
+
     const render = () => pages.appointments();
     document.body.onclick = async (e) => {
-      const b = e.target.closest("button[data-cancel]");
-      if (!b || !window.confirm("Cancel this appointment? Your refund depends on how close it is to the start time.")) return;
-      await withBusy(b, async () => {
-        const c = await api("DELETE", `${EP.appointments}/${encodeURIComponent(b.dataset.cancel)}`);
-        if (!c.ok) { toast(errorMessage(c, "Could not cancel."), "error"); return; }
-        const rf = c.data.appointment?.refund;
-        toast(rf ? `Cancelled. Refund: ${money(rf.amount)} (${rf.percent}%).` : "Cancelled.");
-        render();
+      const rescheduleButton = e.target.closest("button[data-reschedule]");
+      if (rescheduleButton) {
+        const appointment = up.find((a) => String(a.appointment_id) === rescheduleButton.dataset.reschedule);
+        if (appointment) openReschedule(appointment);
+        return;
+      }
+
+      const cancelButton = e.target.closest("button[data-cancel]");
+      if (!cancelButton || !window.confirm("Cancel this appointment? Your refund depends on how close it is to the start time.")) return;
+      await withBusy(cancelButton, async () => {
+        const cancelled = await api("DELETE", `${EP.appointments}/${encodeURIComponent(cancelButton.dataset.cancel)}`);
+        if (!cancelled.ok) { toast(errorMessage(cancelled, "Could not cancel."), "error"); return; }
+        const refund = cancelled.data.appointment?.refund;
+        toast(refund ? `Cancelled. Refund: ${money(refund.amount)} (${refund.percent}%).` : "Cancelled.");
+        await render();
       });
     };
   };
-
 
   /* ---------------------------------------------------------------- history (own page) */
   pages.history = async () => {
